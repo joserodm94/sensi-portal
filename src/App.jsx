@@ -20,6 +20,26 @@ function downloadCSV(filename, headers, rows){
   URL.revokeObjectURL(url);
 }
 
+function tiempoEnEmpresa(hireDateStr){
+  if(!hireDateStr) return null;
+  const start = new Date(hireDateStr+'T00:00:00');
+  const now = new Date();
+  let months = (now.getFullYear()-start.getFullYear())*12 + (now.getMonth()-start.getMonth());
+  if(now.getDate() < start.getDate()) months--;
+  if(months < 0) return null;
+  const years = Math.floor(months/12);
+  const rem = months%12;
+  if(years===0) return `${rem} mes${rem===1?'':'es'}`;
+  if(rem===0) return `${years} año${years===1?'':'s'}`;
+  return `${years} año${years===1?'':'s'}, ${rem} mes${rem===1?'':'es'}`;
+}
+
+async function sendNotification(to, subject, html){
+  if(!to) return;
+  try{ await supabase.functions.invoke('send-email', { body: { to, subject, html } }); }
+  catch(e){ console.error('email error', e); }
+}
+
 // Deducciones de nómina, República Dominicana (vigentes 2026)
 const AFP_RATE = 0.0287;
 const SFS_RATE = 0.0304;
@@ -219,18 +239,22 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [vacationEnabled, setVacationEnabled] = useState(false);
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [attBusy, setAttBusy] = useState(false);
 
   const reload = useCallback(async ()=>{
-    const [b, r, p, s] = await Promise.all([
+    const [b, r, p, s, a] = await Promise.all([
       supabase.rpc('get_teacher_balance', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_requests', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_payroll', { p_teacher_id: user.id }),
       supabase.rpc('get_public_settings'),
+      supabase.rpc('get_teacher_attendance', { p_teacher_id: user.id, p_date: todayStr() }),
     ]);
     if(b.data && b.data[0]) setBalance(b.data[0]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayroll(p.data);
     if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+    if(a.data) setAttendance(a.data);
   },[user.id]);
 
   useEffect(()=>{ reload(); },[reload]);
@@ -239,6 +263,21 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(view!=='calendario') return;
     supabase.rpc('get_calendar_day', { p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
   },[view, calDate]);
+
+  async function markAttendance(type){
+    setAttBusy(true);
+    const { data, error } = await supabase.rpc('log_attendance', { p_teacher_id:user.id, p_type:type });
+    setAttBusy(false);
+    const result = data && data[0];
+    if(error || !result || !result.ok){ toast((result && result.message) || 'No se pudo registrar.'); return; }
+    toast(type==='entrada' ? 'Entrada registrada.' : 'Salida registrada.');
+    reload();
+  }
+
+  const entradaHoy = attendance.find(a=>a.type==='entrada');
+  const salidaHoy = attendance.find(a=>a.type==='salida');
+  const fmtHora = iso => iso ? new Date(iso).toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'}) : '';
+
 
   const disponibles = Math.max((balance.vacation_days_total||0)-(balance.vacation_days_used||0),0);
   const pct = balance.vacation_days_total ? Math.min(100, Math.round(((balance.vacation_days_used||0)/balance.vacation_days_total)*100)) : 0;
@@ -276,6 +315,18 @@ function TeacherApp({ user, onLogout, toast, Toast }){
           <div className="hero-figure"><span className="hero-number">{disponibles}</span><span className="hero-unit">disponibles de {balance.vacation_days_total||0}</span></div>
           <div className="hero-bar"><div className="hero-bar-fill" style={{width:`${pct}%`}} /></div>
           <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
+        </div>
+        <div className="form-card" style={{marginTop:16}}>
+          <p style={{fontWeight:600, fontSize:14.5, marginBottom:10}}>Asistencia de hoy</p>
+          <div className="quick-actions" style={{marginTop:0}}>
+            <button className="btn btn-primary" disabled={attBusy || !!entradaHoy} onClick={()=>markAttendance('entrada')}>
+              {entradaHoy ? `Entrada ${fmtHora(entradaHoy.logged_at)}` : 'Marcar entrada'}
+            </button>
+            <button className="btn btn-outline" disabled={attBusy || !entradaHoy || !!salidaHoy} onClick={()=>markAttendance('salida')}>
+              {salidaHoy ? `Salida ${fmtHora(salidaHoy.logged_at)}` : 'Marcar salida'}
+            </button>
+          </div>
+          <p className="hint" style={{marginTop:10}}>Solo funciona conectada al wifi de Sensi.</p>
         </div>
         <div className="quick-actions">
           {vacationEnabled && <button className="btn btn-primary" onClick={()=>setView('vacaciones')}>Pedir vacaciones</button>}
@@ -408,6 +459,9 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [calForm, setCalForm] = useState(null);
+  const [officeIp, setOfficeIp] = useState('');
+  const [showAttendance, setShowAttendance] = useState(false);
+  const [attendanceDay, setAttendanceDay] = useState([]);
   const [calBulkOpen, setCalBulkOpen] = useState(false);
   const [calBulkStart, setCalBulkStart] = useState(todayStr());
   const [calBulkEnd, setCalBulkEnd] = useState(todayStr());
@@ -426,7 +480,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
     if(p.data) setPayroll(p.data);
-    if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+    if(s.data && s.data[0]){ setVacationEnabled(!!s.data[0].vacation_requests_enabled); setOfficeIp(s.data[0].office_ip||''); }
   },[]);
 
   const reloadCalendar = useCallback(async ()=>{
@@ -435,6 +489,24 @@ function AdminApp({ user, onLogout, toast, Toast }){
   },[calDate]);
 
   useEffect(()=>{ if(view==='calendario') reloadCalendar(); },[view, calDate, reloadCalendar]);
+
+  useEffect(()=>{
+    if(view==='calendario' && showAttendance){
+      supabase.rpc('admin_list_attendance_day', { p_date: calDate }).then(({data})=>{ if(data) setAttendanceDay(data); });
+    }
+  },[view, calDate, showAttendance]);
+
+  async function detectMyIp(){
+    const { data, error } = await supabase.rpc('get_my_ip');
+    if(error || !data){ toast('No se pudo detectar la IP.'); return; }
+    setOfficeIp(data);
+  }
+
+  async function saveOfficeIp(){
+    const { error } = await supabase.rpc('admin_set_office_ip', { p_ip: officeIp.trim() });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('IP del centro guardada.');
+  }
 
   async function toggleVacationEnabled(){
     const next = !vacationEnabled;
@@ -521,9 +593,18 @@ function AdminApp({ user, onLogout, toast, Toast }){
   useEffect(()=>{ reload(); },[reload]);
 
   async function reviewRequest(id, decision){
+    const req = requests.find(r=>r.id===id);
     const { error } = await supabase.rpc('admin_review_request', { p_request_id:id, p_decision:decision });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast(decision==='aprobado' ? 'Solicitud aprobada.' : 'Solicitud rechazada.');
+    if(req){
+      const teacher = teachers.find(t=>t.id===req.teacher_id);
+      const tipo = req.type==='vacacion' ? 'solicitud de vacaciones' : 'solicitud de permiso';
+      const rango = req.type==='vacacion' ? `${fmtDate(req.start_date)} – ${fmtDate(req.end_date)}` : fmtDate(req.perm_date);
+      const estado = decision==='aprobado' ? 'aprobada' : 'rechazada';
+      sendNotification(teacher?.email, `Tu ${tipo} fue ${estado}`,
+        `<p>Hola ${teacher?.name||''},</p><p>Tu ${tipo} para <strong>${rango}</strong> fue <strong>${estado}</strong>.</p><p>— Sensi Portal</p>`);
+    }
     reload();
   }
 
@@ -531,9 +612,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const name = f.name.value.trim(), pin = f.pin.value.trim(), vac = Number(f.vacDays.value)||DEFAULT_VACATION_DAYS;
+    const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -544,9 +626,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const name=f.name.value.trim(), pin=f.pin.value.trim(), vac=Number(f.vacDays.value), used=Number(f.vacUsed.value);
+    const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0 });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -574,6 +657,9 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(error){ toast(error.message.includes('duplicate') ? 'Ya existe una nómina para esa maestra en ese mes.' : 'No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Nómina guardada.');
     setPayrollForm(null);
+    const teacher = teachers.find(t=>t.id===teacherId);
+    sendNotification(teacher?.email, `Tu nómina de ${fmtMonth(month)} ya está disponible`,
+      `<p>Hola ${teacher?.name||''},</p><p>Tu nómina de <strong>${fmtMonth(month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(neto)}</strong>.</p><p>— Sensi Portal</p>`);
     reload();
   }
 
@@ -604,7 +690,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
         p_bruto: row.bruto, p_deducciones: row.calc.deducciones, p_neto: row.calc.neto,
         p_fecha_pago: bulkFecha || null, p_nota: nota
       });
-      if(error) fail++; else ok++;
+      if(error){ fail++; continue; }
+      ok++;
+      sendNotification(row.teacher.email, `Tu nómina de ${fmtMonth(bulkMonth)} ya está disponible`,
+        `<p>Hola ${row.teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(bulkMonth)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(row.calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     }
     setBulkBusy(false);
     toast(fail ? `${ok} guardadas, ${fail} con error (revisa nombres no encontrados).` : `${ok} nóminas guardadas.`);
@@ -700,6 +789,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>PIN (4 dígitos)</label><input name="pin" inputMode="numeric" maxLength={4} placeholder="1234" required /></div>
               <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={DEFAULT_VACATION_DAYS} /></div>
             </div>
+            <div className="field"><label>Correo (para notificaciones, opcional)</label><input name="email" type="email" placeholder="maestra@correo.com" /></div>
+            <div className="two-col">
+              <div className="field"><label>Salario mensual (opcional)</label><input name="salary" type="number" step="0.01" placeholder="25000" /></div>
+              <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" /></div>
+            </div>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>setAddingTeacher(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary">Guardar maestra</button>
@@ -715,6 +809,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={t.vacation_days_total||0} /></div>
               </div>
               <div className="field"><label>Días ya usados</label><input name="vacUsed" type="number" min="0" defaultValue={t.vacation_days_used||0} /></div>
+              <div className="field"><label>Correo (para notificaciones)</label><input name="email" type="email" defaultValue={t.email||''} placeholder="maestra@correo.com" /></div>
+              <div className="two-col">
+                <div className="field"><label>Salario mensual</label><input name="salary" type="number" step="0.01" defaultValue={t.monthly_salary||''} /></div>
+                <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" defaultValue={t.hire_date||''} /></div>
+              </div>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -722,12 +821,19 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </form>
           );
           const disponibles = Math.max((t.vacation_days_total||0)-(t.vacation_days_used||0),0);
+          const tiempo = tiempoEnEmpresa(t.hire_date);
           return (
             <div key={t.id} className={`teacher-row${t.active?'':' inactive'}`}>
               <div className="teacher-row-top">
                 <div>
                   <p className="teacher-name">{t.name}</p>
                   <p className="teacher-meta">{disponibles} de {t.vacation_days_total||0} días disponibles {t.active?'':'· inactiva'}</p>
+                  <p className="teacher-meta">
+                    {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
+                    {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
+                    {tiempo ? ` · ${tiempo} en Sensi` : ''}
+                  </p>
+                  {t.email && <p className="teacher-meta">{t.email}</p>}
                 </div>
                 <div className="row-actions">
                   <button className="mini-btn" onClick={()=>{setEditingTeacherId(t.id); setAddingTeacher(false);}} aria-label="Editar"><Icon name="edit" sw={1.6}/></button>
@@ -844,16 +950,28 @@ function AdminApp({ user, onLogout, toast, Toast }){
   } else if(view==='calendario'){
     content = (
       <>
-        <p className="section-title">Calendario</p>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:0}}>
+          <p className="section-title" style={{margin:0}}>{showAttendance ? 'Asistencia del día' : 'Calendario'}</p>
+          <button className="link-btn" onClick={()=>setShowAttendance(!showAttendance)}>{showAttendance ? 'Ver horarios' : 'Ver asistencia'}</button>
+        </div>
         <div className="day-picker">
           <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-          {!calForm && !calBulkOpen && (
+          {!showAttendance && !calForm && !calBulkOpen && (
             <div style={{display:'flex',gap:8}}>
               <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
               <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
             </div>
           )}
         </div>
+        {showAttendance ? (
+          attendanceDay.length ? attendanceDay.map((a,i)=>(
+            <div key={i} className="summary-row">
+              <span>{a.teacher_name}</span>
+              <span style={{color:'var(--text-muted)',fontSize:13}}>{a.type==='entrada'?'Entrada':'Salida'} · {new Date(a.logged_at).toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+          )) : <div className="empty-state">Nadie ha marcado entrada o salida este día.</div>
+        ) : (
+        <>
         {calBulkOpen && (
           <div className="form-card" style={{marginBottom:16}}>
             <p className="hint" style={{marginBottom:10}}>Define el rango de fechas y los días que se repite, y pega una línea por niño: <strong>Maestra, Niño, Horario</strong>. Ejemplo: <em>Rossella, Piero, 9:00am-10:00am</em>. Se crea automático para cada día del rango que coincida.</p>
@@ -927,6 +1045,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </div>
           </div>
         )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+        </>
+        )}
       </>
     );
   } else if(view==='ajustes'){
@@ -946,6 +1066,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
           <button className="btn btn-primary" type="submit">Actualizar PIN</button>
         </form>
+        <p className="section-title">Red de Sensi (para el log de entrada/salida)</p>
+        <div className="form-card">
+          <div className="field"><label>IP pública del centro</label><input value={officeIp} onChange={e=>setOfficeIp(e.target.value)} placeholder="Ej. 190.123.45.67" /></div>
+          <p className="hint" style={{marginBottom:12}}>Estando conectado al wifi de Sensi, dale "Detectar mi IP" para llenarlo solo.</p>
+          <div className="li-actions">
+            <button className="btn btn-ghost" onClick={detectMyIp}>Detectar mi IP</button>
+            <button className="btn btn-primary" onClick={saveOfficeIp}>Guardar</button>
+          </div>
+        </div>
         <p className="hint" style={{marginTop:18}}>Los datos se guardan en una base de datos de Supabase propia de este proyecto — no dependen de Claude ni de ninguna cuenta para funcionar.</p>
       </>
     );
