@@ -408,6 +408,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [calForm, setCalForm] = useState(null);
+  const [calBulkOpen, setCalBulkOpen] = useState(false);
+  const [calBulkStart, setCalBulkStart] = useState(todayStr());
+  const [calBulkEnd, setCalBulkEnd] = useState(todayStr());
+  const [calBulkDays, setCalBulkDays] = useState([1,2,3,4,5]); // 0=Dom ... 6=Sáb, default L-V
+  const [calBulkText, setCalBulkText] = useState('');
+  const [calBulkPreview, setCalBulkPreview] = useState(null);
+  const [calBulkBusy, setCalBulkBusy] = useState(false);
 
   const reload = useCallback(async ()=>{
     const [r, t, p, s] = await Promise.all([
@@ -455,6 +462,59 @@ function AdminApp({ user, onLogout, toast, Toast }){
   async function deleteCalEntry(id){
     const { error } = await supabase.rpc('admin_delete_calendar_entry', { p_entry_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
+    reloadCalendar();
+  }
+
+  const WEEKDAYS = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  function toggleCalBulkDay(d){
+    setCalBulkDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev, d].sort());
+  }
+
+  function parseCalBulk(){
+    const lines = calBulkText.split('\n').map(l=>l.trim()).filter(Boolean);
+    const parsedLines = lines.map(line=>{
+      const parts = line.split(',');
+      const rawName = (parts[0]||'').trim();
+      const childName = (parts[1]||'').trim();
+      const horario = (parts[2]||'').trim();
+      const nameLower = rawName.toLowerCase();
+      let teacher = teachers.find(t=>t.name.toLowerCase()===nameLower);
+      if(!teacher) teacher = teachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
+      return { rawName, childName, horario, teacher };
+    });
+    const dates = [];
+    if(calBulkStart && calBulkEnd && calBulkEnd>=calBulkStart){
+      let d = new Date(calBulkStart+'T00:00:00');
+      const end = new Date(calBulkEnd+'T00:00:00');
+      while(d<=end){
+        if(calBulkDays.includes(d.getDay())) dates.push(d.toISOString().slice(0,10));
+        d.setDate(d.getDate()+1);
+      }
+    }
+    setCalBulkPreview({ lines: parsedLines, dates });
+  }
+
+  async function saveCalBulk(){
+    if(!calBulkPreview) return;
+    const { lines, dates } = calBulkPreview;
+    const validLines = lines.filter(l=>l.teacher && l.childName);
+    if(!validLines.length || !dates.length){ toast('Revisa la lista y el rango de fechas.'); return; }
+    setCalBulkBusy(true);
+    let ok=0, fail=0;
+    for(const date of dates){
+      for(const l of validLines){
+        const { error } = await supabase.rpc('admin_save_calendar_entry', {
+          p_entry_id: null, p_entry_date: date, p_teacher_id: l.teacher.id,
+          p_child_name: l.childName, p_horario: l.horario, p_notes: ''
+        });
+        if(error) fail++; else ok++;
+      }
+    }
+    setCalBulkBusy(false);
+    toast(fail ? `${ok} guardadas, ${fail} con error.` : `${ok} entradas guardadas en el calendario.`);
+    setCalBulkOpen(false);
+    setCalBulkPreview(null);
+    setCalBulkText('');
     reloadCalendar();
   }
 
@@ -787,8 +847,55 @@ function AdminApp({ user, onLogout, toast, Toast }){
         <p className="section-title">Calendario</p>
         <div className="day-picker">
           <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-          {!calForm && <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>}
+          {!calForm && !calBulkOpen && (
+            <div style={{display:'flex',gap:8}}>
+              <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
+              <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
+            </div>
+          )}
         </div>
+        {calBulkOpen && (
+          <div className="form-card" style={{marginBottom:16}}>
+            <p className="hint" style={{marginBottom:10}}>Define el rango de fechas y los días que se repite, y pega una línea por niño: <strong>Maestra, Niño, Horario</strong>. Ejemplo: <em>Rossella, Piero, 9:00am-10:00am</em>. Se crea automático para cada día del rango que coincida.</p>
+            <div className="two-col">
+              <div className="field"><label>Desde</label><input type="date" value={calBulkStart} onChange={e=>{setCalBulkStart(e.target.value); setCalBulkPreview(null);}} /></div>
+              <div className="field"><label>Hasta</label><input type="date" value={calBulkEnd} onChange={e=>{setCalBulkEnd(e.target.value); setCalBulkPreview(null);}} /></div>
+            </div>
+            <div className="field">
+              <label>Repetir en estos días</label>
+              <div className="chip-row" style={{marginBottom:0}}>
+                {WEEKDAYS.map((label,i)=>(
+                  <button key={i} type="button" className={`chip${calBulkDays.includes(i)?' active':''}`} onClick={()=>{toggleCalBulkDay(i); setCalBulkPreview(null);}}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="field">
+              <label>Lista (una fila por niño)</label>
+              <textarea rows={5} value={calBulkText} onChange={e=>{setCalBulkText(e.target.value); setCalBulkPreview(null);}} placeholder={'Rossella, Piero, 9:00am-10:00am\nAna Pérez, Sofía, 10:00am-11:00am'} />
+            </div>
+            {!calBulkPreview ? (
+              <div className="li-actions">
+                <button className="btn btn-ghost" onClick={()=>{setCalBulkOpen(false); setCalBulkText('');}}>Cancelar</button>
+                <button className="btn btn-primary" onClick={parseCalBulk} disabled={!calBulkText.trim()}>Calcular</button>
+              </div>
+            ) : (
+              <>
+                <p className="section-title" style={{marginTop:18}}>Revisa antes de guardar</p>
+                {calBulkPreview.lines.map((l,i)=>(
+                  <div key={i} className="list-item" style={{borderLeftColor: l.teacher && l.childName ? 'var(--success)' : 'var(--danger)'}}>
+                    <p className="li-title">{l.rawName || '(sin nombre)'}{l.teacher ? ` → ${l.teacher.name}` : ' — no encontrada'} · {l.childName || '(sin niño)'}</p>
+                    {l.horario && <p className="li-sub">{l.horario}</p>}
+                  </div>
+                ))}
+                <p className="hint" style={{margin:'10px 0'}}>{calBulkPreview.dates.length} día{calBulkPreview.dates.length===1?'':'s'} en el rango × {calBulkPreview.lines.filter(l=>l.teacher&&l.childName).length} fila{calBulkPreview.lines.length===1?'':'s'} válida{calBulkPreview.lines.length===1?'':'s'} = {calBulkPreview.dates.length * calBulkPreview.lines.filter(l=>l.teacher&&l.childName).length} entradas se van a crear.</p>
+                <div className="li-actions">
+                  <button className="btn btn-ghost" onClick={()=>setCalBulkPreview(null)}>Editar</button>
+                  <button className="btn btn-primary" onClick={saveCalBulk} disabled={calBulkBusy}>{calBulkBusy?'Guardando…':'Confirmar y guardar todo'}</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
         {calForm && (
           <form className="form-card" style={{marginBottom:16}} onSubmit={saveCalEntry}>
             <div className="field"><label>Maestra</label>
