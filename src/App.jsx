@@ -36,8 +36,12 @@ function tiempoEnEmpresa(hireDateStr){
 
 async function sendNotification(to, subject, html){
   if(!to) return;
-  try{ await supabase.functions.invoke('send-email', { body: { to, subject, html } }); }
-  catch(e){ console.error('email error', e); }
+  try{
+    await supabase.functions.invoke('send-email', {
+      body: { to, subject, html },
+      headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+    });
+  }catch(e){ console.error('email error', e); }
 }
 
 // Deducciones de nómina, República Dominicana (vigentes 2026)

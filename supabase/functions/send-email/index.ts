@@ -13,6 +13,15 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
   try {
+    const providedSecret = req.headers.get("x-portal-secret");
+    const expectedSecret = Deno.env.get("PORTAL_SHARED_SECRET");
+    if (!expectedSecret || providedSecret !== expectedSecret) {
+      return new Response(JSON.stringify({ error: "No autorizado" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { to, subject, html } = await req.json();
     if (!to || !subject || !html) {
       return new Response(JSON.stringify({ error: "Faltan campos (to, subject, html)" }), {
