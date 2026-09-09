@@ -42,9 +42,10 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .brand-strip .c5{background:#2F6F62;}
 
 .login-screen{min-height:100vh;display:flex;flex-direction:column;}
-.login-hero{padding:52px 28px 28px;text-align:left;}
+.login-hero{padding:44px 28px 24px;text-align:left;}
+.login-logo{width:64px;height:64px;object-fit:contain;margin-bottom:14px;border-radius:16px;}
 .login-hero h1{font-size:26px;}
-.login-hero p{color:var(--text-muted);margin-top:6px;font-size:14.5px;}
+.login-subtitle{color:var(--text-muted);margin-top:4px;font-size:13.5px;font-weight:500;}
 .login-body{flex:1;background:var(--surface);border-top-left-radius:26px;border-top-right-radius:26px;padding:26px 24px 40px;box-shadow:0 -6px 18px rgba(30,42,34,0.05);}
 .role-tabs{display:flex;gap:6px;background:var(--bg);border-radius:999px;padding:4px;margin-bottom:26px;}
 .role-tab{flex:1;border:none;background:transparent;padding:10px 0;border-radius:999px;font-weight:600;font-size:14.5px;color:var(--text-muted);}
@@ -134,3 +135,17 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .banner-error{background:var(--danger-soft);border:1px solid var(--danger);color:var(--danger);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:16px;font-size:13px;}
 .link-btn{background:none;border:none;color:inherit;font-weight:600;font-size:13.5px;padding:4px 0;text-decoration:underline;}
+
+.export-row{display:flex;gap:8px;margin-bottom:14px;}
+.export-row .btn{width:auto;}
+.day-picker{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+.day-picker input{flex:1;}
+.cal-entry{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:8px;}
+.summary-row{display:flex;justify-content:space-between;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:8px;}
+
+@media print{
+  .bottom-nav, .app-header .icon-btn, .brand-strip, .chip-row, .export-row, .toast, .li-actions, .form-card, .quick-actions { display:none !important; }
+  .content{ padding:0; }
+  .app-shell{ max-width:100%; }
+}
+

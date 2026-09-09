@@ -9,6 +9,17 @@ function fmtMonth(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(Number);
 function fmtMoney(n){ const num=Number(n)||0; return 'RD$ ' + num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 
+function downloadCSV(filename, headers, rows){
+  const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
+  const csv = [headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\r\n');
+  const blob = new Blob(['\uFEFF'+csv], { type:'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // Deducciones de nómina, República Dominicana (vigentes 2026)
 const AFP_RATE = 0.0287;
 const SFS_RATE = 0.0304;
@@ -118,8 +129,9 @@ function Login({ onLogin, toast, Toast }){
     <div className="app-shell login-screen">
       <BrandStrip />
       <div className="login-hero">
-        <h1>Portal de Personal</h1>
-        <p>Centro de Estimulación Temprana Sensi</p>
+        <img src="/sensi-logo.png" alt="Sensi" className="login-logo" />
+        <h1>Sensi Portal</h1>
+        <p className="login-subtitle">Portal Extranet</p>
       </div>
       <div className="login-body">
         <div className="role-tabs">
@@ -204,19 +216,29 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [requests, setRequests] = useState([]);
   const [payroll, setPayroll] = useState([]);
   const [openNomina, setOpenNomina] = useState(null);
+  const [vacationEnabled, setVacationEnabled] = useState(false);
+  const [calDate, setCalDate] = useState(todayStr());
+  const [calEntries, setCalEntries] = useState([]);
 
   const reload = useCallback(async ()=>{
-    const [b, r, p] = await Promise.all([
+    const [b, r, p, s] = await Promise.all([
       supabase.rpc('get_teacher_balance', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_requests', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_payroll', { p_teacher_id: user.id }),
+      supabase.rpc('get_public_settings'),
     ]);
     if(b.data && b.data[0]) setBalance(b.data[0]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayroll(p.data);
+    if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
   },[user.id]);
 
   useEffect(()=>{ reload(); },[reload]);
+
+  useEffect(()=>{
+    if(view!=='calendario') return;
+    supabase.rpc('get_calendar_day', { p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
+  },[view, calDate]);
 
   const disponibles = Math.max((balance.vacation_days_total||0)-(balance.vacation_days_used||0),0);
   const pct = balance.vacation_days_total ? Math.min(100, Math.round(((balance.vacation_days_used||0)/balance.vacation_days_total)*100)) : 0;
@@ -256,7 +278,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
           <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
         </div>
         <div className="quick-actions">
-          <button className="btn btn-primary" onClick={()=>setView('vacaciones')}>Pedir vacaciones</button>
+          {vacationEnabled && <button className="btn btn-primary" onClick={()=>setView('vacaciones')}>Pedir vacaciones</button>}
           <button className="btn btn-outline" onClick={()=>setView('permisos')}>Pedir permiso</button>
         </div>
         <p className="section-title">Últimas solicitudes</p>
@@ -305,6 +327,10 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     ) : (
       <>
         <p className="section-title">Nómina mensual</p>
+        <div className="export-row">
+          <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`nomina_${user.name}.csv`, ['Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
+        </div>
         {payroll.map(p=>(
           <div key={p.id} className={`nomina-row${openNomina===p.id?' open':''}`}>
             <div className="nomina-row-head" onClick={()=>setOpenNomina(openNomina===p.id?null:p.id)}>
@@ -326,6 +352,22 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         ))}
       </>
     );
+  } else if(view==='calendario'){
+    content = (
+      <>
+        <p className="section-title">Calendario del día</p>
+        <div className="day-picker">
+          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
+        </div>
+        {calEntries.length ? calEntries.map(c=>(
+          <div key={c.id} className="cal-entry">
+            <p className="li-title">{c.teacher_name}</p>
+            <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}</p>
+            {c.notes && <p className="li-reason">{c.notes}</p>}
+          </div>
+        )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+      </>
+    );
   }
 
   return (
@@ -334,9 +376,10 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       <div className="content">{content}</div>
       <nav className="bottom-nav">
         <button className={`nav-btn${view==='inicio'?' active':''}`} onClick={()=>setView('inicio')}><Icon name="home"/><span>Inicio</span></button>
-        <button className={`nav-btn${view==='vacaciones'?' active':''}`} onClick={()=>setView('vacaciones')}><Icon name="sun"/><span>Vacaciones</span></button>
+        {vacationEnabled && <button className={`nav-btn${view==='vacaciones'?' active':''}`} onClick={()=>setView('vacaciones')}><Icon name="sun"/><span>Vacaciones</span></button>}
         <button className={`nav-btn${view==='permisos'?' active':''}`} onClick={()=>setView('permisos')}><Icon name="calendar"/><span>Permisos</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
+        <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="users"/><span>Calendario</span></button>
       </nav>
       <Toast />
     </div>
@@ -350,6 +393,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [teachers, setTeachers] = useState([]);
   const [payroll, setPayroll] = useState([]);
   const [reqFilter, setReqFilter] = useState('pendientes');
+  const [showSummary, setShowSummary] = useState(false);
+  const [summaryMonth, setSummaryMonth] = useState(new Date().toISOString().slice(0,7));
   const [addingTeacher, setAddingTeacher] = useState(false);
   const [editingTeacherId, setEditingTeacherId] = useState(null);
   const [payrollForm, setPayrollForm] = useState(null);
@@ -359,17 +404,59 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [bulkFecha, setBulkFecha] = useState(todayStr());
   const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows before saving
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [vacationEnabled, setVacationEnabled] = useState(false);
+  const [calDate, setCalDate] = useState(todayStr());
+  const [calEntries, setCalEntries] = useState([]);
+  const [calForm, setCalForm] = useState(null);
 
   const reload = useCallback(async ()=>{
-    const [r, t, p] = await Promise.all([
+    const [r, t, p, s] = await Promise.all([
       supabase.rpc('admin_list_requests'),
       supabase.rpc('admin_list_teachers'),
       supabase.rpc('admin_list_payroll'),
+      supabase.rpc('get_public_settings'),
     ]);
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
     if(p.data) setPayroll(p.data);
+    if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
   },[]);
+
+  const reloadCalendar = useCallback(async ()=>{
+    const { data } = await supabase.rpc('get_calendar_day', { p_date: calDate });
+    if(data) setCalEntries(data);
+  },[calDate]);
+
+  useEffect(()=>{ if(view==='calendario') reloadCalendar(); },[view, calDate, reloadCalendar]);
+
+  async function toggleVacationEnabled(){
+    const next = !vacationEnabled;
+    const { error } = await supabase.rpc('admin_set_vacation_requests_enabled', { p_enabled: next });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    setVacationEnabled(next);
+    toast(next ? 'Vacaciones activadas para las maestras.' : 'Vacaciones ocultas para las maestras.');
+  }
+
+  async function saveCalEntry(e){
+    e.preventDefault();
+    const f = e.target;
+    const teacherId = f.teacherId.value, childName = f.childName.value.trim(), horario = f.horario.value.trim(), notes = f.notes.value.trim();
+    if(!teacherId || !childName){ toast('Completa maestra y niño.'); return; }
+    const { error } = await supabase.rpc('admin_save_calendar_entry', {
+      p_entry_id: calForm.id || null, p_entry_date: calDate, p_teacher_id: teacherId,
+      p_child_name: childName, p_horario: horario, p_notes: notes
+    });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('Guardado.');
+    setCalForm(null);
+    reloadCalendar();
+  }
+
+  async function deleteCalEntry(id){
+    const { error } = await supabase.rpc('admin_delete_calendar_entry', { p_entry_id:id });
+    if(error){ toast('No se pudo eliminar.'); return; }
+    reloadCalendar();
+  }
 
   useEffect(()=>{ reload(); },[reload]);
 
@@ -494,16 +581,51 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(reqFilter==='pendientes') list = list.filter(r=>r.status==='pendiente');
     else if(reqFilter==='vacaciones') list = list.filter(r=>r.type==='vacacion');
     else if(reqFilter==='permisos') list = list.filter(r=>r.type==='permiso');
-    content = (
-      <>
-        <div className="chip-row">
-          {['pendientes','todas','vacaciones','permisos'].map(f=>(
-            <button key={f} className={`chip${reqFilter===f?' active':''}`} onClick={()=>setReqFilter(f)}>{f[0].toUpperCase()+f.slice(1)}</button>
+
+    if(showSummary){
+      const inMonth = d => d && d.slice(0,7)===summaryMonth;
+      const rows = teachers.map(t=>{
+        const vac = requests.filter(r=>r.teacher_id===t.id && r.type==='vacacion' && r.status==='aprobado' && inMonth(r.start_date));
+        const perm = requests.filter(r=>r.teacher_id===t.id && r.type==='permiso' && r.status==='aprobado' && inMonth(r.perm_date));
+        const vacDays = vac.reduce((s,r)=>s+(r.days||0),0);
+        return { name:t.name, vacDays, permCount:perm.length };
+      });
+      content = (
+        <>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <p className="section-title" style={{margin:0}}>Resumen mensual</p>
+            <button className="link-btn" onClick={()=>setShowSummary(false)}>Volver a solicitudes</button>
+          </div>
+          <div className="field"><label>Mes</label><input type="month" value={summaryMonth} onChange={e=>setSummaryMonth(e.target.value)} /></div>
+          <div className="export-row">
+            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`resumen_${summaryMonth}.csv`, ['Maestra','Días de vacaciones aprobados','Permisos aprobados'], rows.map(r=>[r.name, r.vacDays, r.permCount]))}>Exportar CSV</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
+          </div>
+          {rows.map(r=>(
+            <div key={r.name} className="summary-row">
+              <span>{r.name}</span>
+              <span style={{color:'var(--text-muted)',fontSize:13}}>{r.vacDays} día{r.vacDays===1?'':'s'} vac. · {r.permCount} permiso{r.permCount===1?'':'s'}</span>
+            </div>
           ))}
-        </div>
-        {list.length ? list.map(r=><RequestItem key={r.id} r={r} showActions onReview={reviewRequest} teacherName={r.teacher_name} />) : <div className="empty-state">No hay solicitudes en esta vista.</div>}
-      </>
-    );
+        </>
+      );
+    } else {
+      content = (
+        <>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+            <div className="chip-row" style={{marginBottom:0}}>
+              {['pendientes','todas','vacaciones','permisos'].map(f=>(
+                <button key={f} className={`chip${reqFilter===f?' active':''}`} onClick={()=>setReqFilter(f)}>{f[0].toUpperCase()+f.slice(1)}</button>
+              ))}
+            </div>
+          </div>
+          <div className="export-row">
+            <button className="link-btn" onClick={()=>setShowSummary(true)}>Ver resumen mensual</button>
+          </div>
+          {list.length ? list.map(r=><RequestItem key={r.id} r={r} showActions onReview={reviewRequest} teacherName={r.teacher_name} />) : <div className="empty-state">No hay solicitudes en esta vista.</div>}
+        </>
+      );
+    }
   } else if(view==='maestras'){
     content = (
       <>
@@ -571,6 +693,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </div>
           )}
         </div>
+        {!f && !bulkOpen && payroll.length>0 && (
+          <div className="export-row">
+            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
+          </div>
+        )}
         {bulkOpen && (
           <div className="form-card" style={{marginBottom:16}}>
             <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto</strong>. Ejemplo: <em>Rossella, 25000</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
@@ -653,9 +781,58 @@ function AdminApp({ user, onLogout, toast, Toast }){
         )) : <div className="empty-state">No hay nóminas registradas todavía.</div>}
       </>
     );
+  } else if(view==='calendario'){
+    content = (
+      <>
+        <p className="section-title">Calendario</p>
+        <div className="day-picker">
+          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
+          {!calForm && <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>}
+        </div>
+        {calForm && (
+          <form className="form-card" style={{marginBottom:16}} onSubmit={saveCalEntry}>
+            <div className="field"><label>Maestra</label>
+              <select name="teacherId" defaultValue={calForm.teacherId}>
+                {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+            <div className="field"><label>Niño/a</label><input name="childName" defaultValue={calForm.childName||''} placeholder="Ej. Piero Rodríguez" required /></div>
+            <div className="field"><label>Horario</label><input name="horario" defaultValue={calForm.horario||''} placeholder="Ej. 9:00am - 10:00am" /></div>
+            <div className="field"><label>Nota (opcional)</label><textarea name="notes" defaultValue={calForm.notes||''} /></div>
+            <div className="li-actions">
+              <button type="button" className="btn btn-ghost" onClick={()=>setCalForm(null)}>Cancelar</button>
+              <button type="submit" className="btn btn-primary">Guardar</button>
+            </div>
+          </form>
+        )}
+        {calEntries.length ? calEntries.map(c=>(
+          <div key={c.id} className="cal-entry">
+            <div className="li-top">
+              <div>
+                <p className="li-title">{c.teacher_name}</p>
+                <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}</p>
+                {c.notes && <p className="li-reason">{c.notes}</p>}
+              </div>
+              <div className="row-actions">
+                <button className="mini-btn" onClick={()=>setCalForm({ id:c.id, teacherId:c.teacher_id, childName:c.child_name, horario:c.horario, notes:c.notes })}><Icon name="edit" sw={1.6}/></button>
+                <button className="mini-btn" onClick={()=>deleteCalEntry(c.id)}><Icon name="trash" sw={1.6}/></button>
+              </div>
+            </div>
+          </div>
+        )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+      </>
+    );
   } else if(view==='ajustes'){
     content = (
       <>
+        <p className="section-title">Solicitudes de vacaciones</p>
+        <div className="form-card" style={{marginBottom:20, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <div>
+            <p style={{fontWeight:600, fontSize:14.5}}>Visible para las maestras</p>
+            <p className="hint" style={{marginTop:4}}>{vacationEnabled ? 'Las maestras pueden pedir vacaciones ahora mismo.' : 'Está oculta — las maestras no ven la pestaña de Vacaciones.'}</p>
+          </div>
+          <button className={`btn btn-sm ${vacationEnabled?'btn-outline':'btn-warm'}`} onClick={toggleVacationEnabled}>{vacationEnabled ? 'Ocultar' : 'Activar'}</button>
+        </div>
         <p className="section-title">Cambiar PIN de administración</p>
         <form className="form-card" onSubmit={changeAdminPin}>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
@@ -672,11 +849,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
       <Header user={user} subtitle="Administración" onLogout={onLogout} />
       <div className="content">{content}</div>
       <nav className="bottom-nav">
-        <button className={`nav-btn${view==='solicitudes'?' active':''}`} onClick={()=>setView('solicitudes')} style={{position:'relative'}}>
+        <button className={`nav-btn${view==='solicitudes'?' active':''}`} onClick={()=>{setView('solicitudes'); setShowSummary(false);}} style={{position:'relative'}}>
           {pendingCount>0 && <span className="nav-dot" />}<Icon name="inbox"/><span>Solicitudes</span>
         </button>
         <button className={`nav-btn${view==='maestras'?' active':''}`} onClick={()=>setView('maestras')}><Icon name="users"/><span>Maestras</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
+        <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="calendar"/><span>Calendario</span></button>
         <button className={`nav-btn${view==='ajustes'?' active':''}`} onClick={()=>setView('ajustes')}><Icon name="settings"/><span>Ajustes</span></button>
       </nav>
       <Toast />
