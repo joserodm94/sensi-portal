@@ -9,6 +9,26 @@ function fmtMonth(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(Number);
 function fmtMoney(n){ const num=Number(n)||0; return 'RD$ ' + num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 
+// Deducciones de nómina, República Dominicana (vigentes 2026)
+const AFP_RATE = 0.0287;
+const SFS_RATE = 0.0304;
+function calcularDeduccionesRD(brutoMensual){
+  const bruto = Number(brutoMensual) || 0;
+  const afp = bruto * AFP_RATE;
+  const sfs = bruto * SFS_RATE;
+  const gravableMensual = bruto - afp - sfs;
+  const anual = gravableMensual * 12;
+  let isrAnual;
+  if (anual <= 416220) isrAnual = 0;
+  else if (anual <= 624329) isrAnual = (anual - 416220) * 0.15;
+  else if (anual <= 867123) isrAnual = 31216 + (anual - 624329) * 0.20;
+  else isrAnual = 79776 + (anual - 867123) * 0.25;
+  const isr = isrAnual / 12;
+  const deducciones = afp + sfs + isr;
+  const neto = bruto - deducciones;
+  return { afp, sfs, isr, deducciones, neto };
+}
+
 const ICONS = {
   home:'<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H9a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h2.5a1 1 0 0 0 1-1v-9"/>',
   sun:'<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4M12 19.1v2.4M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.6 19.4l1.7-1.7M17.7 6.3l1.7-1.7"/>',
@@ -333,6 +353,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [addingTeacher, setAddingTeacher] = useState(false);
   const [editingTeacherId, setEditingTeacherId] = useState(null);
   const [payrollForm, setPayrollForm] = useState(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkMonth, setBulkMonth] = useState(new Date().toISOString().slice(0,7));
+  const [bulkFecha, setBulkFecha] = useState(todayStr());
+  const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows before saving
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const reload = useCallback(async ()=>{
     const [r, t, p] = await Promise.all([
@@ -401,6 +427,43 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(error){ toast(error.message.includes('duplicate') ? 'Ya existe una nómina para esa maestra en ese mes.' : 'No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Nómina guardada.');
     setPayrollForm(null);
+    reload();
+  }
+
+  function parseBulk(){
+    const lines = bulkText.split('\n').map(l=>l.trim()).filter(Boolean);
+    const rows = lines.map(line=>{
+      const parts = line.split(',');
+      const rawName = (parts[0]||'').trim();
+      const bruto = Number((parts[1]||'').replace(/[^\d.]/g,'')) || 0;
+      const nameLower = rawName.toLowerCase();
+      let teacher = teachers.find(t=>t.name.toLowerCase()===nameLower);
+      if(!teacher) teacher = teachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
+      const calc = bruto ? calcularDeduccionesRD(bruto) : null;
+      return { rawName, bruto, teacher, calc };
+    });
+    setBulkPreview(rows);
+  }
+
+  async function saveBulk(){
+    if(!bulkPreview) return;
+    setBulkBusy(true);
+    let ok=0, fail=0;
+    for(const row of bulkPreview){
+      if(!row.teacher || !row.bruto){ fail++; continue; }
+      const nota = `AFP: ${fmtMoney(row.calc.afp)} (2.87%) · SFS: ${fmtMoney(row.calc.sfs)} (3.04%) · ISR: ${fmtMoney(row.calc.isr)}`;
+      const { error } = await supabase.rpc('admin_save_payroll', {
+        p_payroll_id: null, p_teacher_id: row.teacher.id, p_month: bulkMonth,
+        p_bruto: row.bruto, p_deducciones: row.calc.deducciones, p_neto: row.calc.neto,
+        p_fecha_pago: bulkFecha || null, p_nota: nota
+      });
+      if(error) fail++; else ok++;
+    }
+    setBulkBusy(false);
+    toast(fail ? `${ok} guardadas, ${fail} con error (revisa nombres no encontrados).` : `${ok} nóminas guardadas.`);
+    setBulkPreview(null);
+    setBulkText('');
+    setBulkOpen(false);
     reload();
   }
 
@@ -499,10 +562,54 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const f = payrollForm;
     content = (
       <>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14, gap:8}}>
           <p className="section-title" style={{margin:0}}>Registros de nómina</p>
-          {!f && <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', deducciones:'', neto:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>}
+          {!f && !bulkOpen && (
+            <div style={{display:'flex',gap:8}}>
+              <button className="btn btn-outline btn-sm" onClick={()=>{setBulkOpen(true); setBulkPreview(null);}}>Carga masiva</button>
+              <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', deducciones:'', neto:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
+            </div>
+          )}
         </div>
+        {bulkOpen && (
+          <div className="form-card" style={{marginBottom:16}}>
+            <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto</strong>. Ejemplo: <em>Rossella, 25000</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
+            <div className="two-col">
+              <div className="field"><label>Mes</label><input type="month" value={bulkMonth} onChange={e=>setBulkMonth(e.target.value)} /></div>
+              <div className="field"><label>Fecha de pago</label><input type="date" value={bulkFecha} onChange={e=>setBulkFecha(e.target.value)} /></div>
+            </div>
+            <div className="field">
+              <label>Lista (una maestra por línea)</label>
+              <textarea rows={5} value={bulkText} onChange={e=>{setBulkText(e.target.value); setBulkPreview(null);}} placeholder={'Rossella, 25000\nAna Pérez, 30000'} />
+            </div>
+            {!bulkPreview ? (
+              <div className="li-actions">
+                <button className="btn btn-ghost" onClick={()=>{setBulkOpen(false); setBulkText(''); setBulkPreview(null);}}>Cancelar</button>
+                <button className="btn btn-primary" onClick={parseBulk} disabled={!bulkText.trim()}>Calcular</button>
+              </div>
+            ) : (
+              <>
+                <p className="section-title" style={{marginTop:18}}>Revisa antes de guardar</p>
+                {bulkPreview.map((row,i)=>(
+                  <div key={i} className="list-item" style={{borderLeftColor: row.teacher && row.bruto ? 'var(--success)' : 'var(--danger)'}}>
+                    <div className="li-top">
+                      <div>
+                        <p className="li-title">{row.rawName || '(sin nombre)'}{row.teacher ? ` → ${row.teacher.name}` : ' — no encontrada'}</p>
+                        {row.calc && <p className="li-sub">Bruto {fmtMoney(row.bruto)} · Neto {fmtMoney(row.calc.neto)}</p>}
+                      </div>
+                    </div>
+                    {row.calc && <p className="li-reason">AFP {fmtMoney(row.calc.afp)} · SFS {fmtMoney(row.calc.sfs)} · ISR {fmtMoney(row.calc.isr)}</p>}
+                    {!row.teacher && <p className="li-reason" style={{color:'var(--danger)'}}>No coincide con ninguna maestra registrada — se omitirá.</p>}
+                  </div>
+                ))}
+                <div className="li-actions">
+                  <button className="btn btn-ghost" onClick={()=>setBulkPreview(null)}>Editar lista</button>
+                  <button className="btn btn-primary" onClick={saveBulk} disabled={bulkBusy}>{bulkBusy?'Guardando…':'Confirmar y guardar todo'}</button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
         {f && (
           <form className="form-card" style={{marginBottom:16}} onSubmit={savePayrollForm} onChange={(e)=>{
             if(e.target.name==='bruto' || e.target.name==='deducciones'){
