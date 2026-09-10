@@ -800,6 +800,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reloadNinos();
   }
 
+  async function toggleFamilyItemActive(id){
+    const { error } = await supabase.rpc('admin_toggle_family_item_active', { p_item_id:id });
+    if(error){ toast('No se pudo guardar.'); return; }
+    reloadNinos();
+  }
+
   async function sendInvoiceNow(familyId){
     setSendingInvoiceFor(familyId);
     const { data, error } = await supabase.functions.invoke('send-invoice', {
@@ -1442,14 +1448,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
                   {isOpen && (
                     <div style={{marginTop:12, borderTop:'1px solid var(--border)', paddingTop:12}}>
                       {(fam.items||[]).map(it=>(
-                        <div key={it.id} className="list-item" style={{marginBottom:6}}>
+                        <div key={it.id} className={`list-item${it.active===false?' inactive':''}`} style={{marginBottom:6, opacity: it.active===false?0.55:1}}>
                           <div className="li-top">
                             <div>
-                              <p className="li-title">{it.child_name}</p>
+                              <p className="li-title">{it.child_name}{it.active===false?' · inactivo':''}</p>
                               <p className="li-sub">{it.program}{it.schedule?` · ${it.schedule}`:''} · {fmtMoney(it.amount)}</p>
                             </div>
                             <div className="row-actions">
                               <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount })}><Icon name="edit" sw={1.6}/></button>
+                              <button className="mini-btn" onClick={()=>toggleFamilyItemActive(it.id)} aria-label="Activar o desactivar">{it.active===false?<Icon name="check" sw={1.8}/>:<Icon name="x" sw={1.8}/>}</button>
                               <button className="mini-btn" onClick={()=>deleteFamilyItem(it.id)}><Icon name="trash" sw={1.6}/></button>
                             </div>
                           </div>

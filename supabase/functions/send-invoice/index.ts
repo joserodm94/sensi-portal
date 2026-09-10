@@ -152,7 +152,7 @@ Deno.serve(async (req) => {
 
     for (const fam of families) {
       try {
-        const items = (fam.family_items || []).filter(it => Number(it.amount) > 0);
+        const items = (fam.family_items || []).filter(it => Number(it.amount) > 0 && it.active !== false);
         if (!items.length) { results.push({ tutor: fam.tutor_name, ok: false, error: "sin items" }); failed++; continue; }
 
         // Siguiente número de factura para el mes de emisión actual

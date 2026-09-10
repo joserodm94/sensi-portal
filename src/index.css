@@ -91,6 +91,9 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .list-item.st-aprobado{border-left-color:var(--success);}
 .list-item.st-rechazado{border-left-color:var(--danger);}
 .li-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+.li-top > div:first-child{flex:1; min-width:0;}
+.li-top .row-actions, .li-top .badge{flex-shrink:0;}
+.row-actions{flex-wrap:wrap; justify-content:flex-end;}
 .li-title{font-weight:600;font-size:15px;}
 .li-sub{color:var(--text-muted);font-size:13px;margin-top:3px;}
 .li-reason{margin-top:8px;font-size:13.5px;color:var(--text);}
