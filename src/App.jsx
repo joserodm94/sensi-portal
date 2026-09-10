@@ -815,10 +815,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const f = e.target;
     const childName = f.childName.value.trim(), program = f.program.value.trim();
     const schedule = f.schedule.value.trim(), amount = Number(f.amount.value)||0;
+    const teacherId = f.teacherId.value || null;
     if(!childName || !program){ toast('Completa nombre del niño y programa.'); return; }
     const { error } = await supabase.rpc('admin_save_family_item', {
       p_item_id: familyItemForm.id, p_family_id: familyId, p_child_name: childName,
-      p_program: program, p_schedule: schedule, p_amount: amount
+      p_program: program, p_schedule: schedule, p_amount: amount, p_teacher_id: teacherId
     });
     if(error){ toast('No se pudo guardar.'); return; }
     setFamilyItemForm(null);
@@ -992,9 +993,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const f = e.target;
     const name = f.name.value.trim(), pin = f.pin.value.trim(), vac = Number(f.vacDays.value)||DEFAULT_VACATION_DAYS;
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
+    const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -1006,9 +1008,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const f = e.target;
     const name=f.name.value.trim(), pin=f.pin.value.trim(), vac=Number(f.vacDays.value), used=Number(f.vacUsed.value);
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
+    const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1171,11 +1174,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>PIN (4 dígitos)</label><input name="pin" inputMode="numeric" maxLength={4} placeholder="1234" required /></div>
               <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={DEFAULT_VACATION_DAYS} /></div>
             </div>
+            <div className="field"><label>Cédula</label><input name="cedula" placeholder="402-0000000-0" /></div>
             <div className="field"><label>Correo (para notificaciones, opcional)</label><input name="email" type="email" placeholder="maestra@correo.com" /></div>
             <div className="two-col">
               <div className="field"><label>Salario mensual (opcional)</label><input name="salary" type="number" step="0.01" placeholder="25000" /></div>
               <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" /></div>
             </div>
+            <div className="field"><label>Horario laboral</label><input name="workSchedule" placeholder="Ej. Lunes a Viernes AM y PM" /></div>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>setAddingTeacher(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary">Guardar maestra</button>
@@ -1191,11 +1196,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={t.vacation_days_total||0} /></div>
               </div>
               <div className="field"><label>Días ya usados</label><input name="vacUsed" type="number" min="0" defaultValue={t.vacation_days_used||0} /></div>
+              <div className="field"><label>Cédula</label><input name="cedula" defaultValue={t.cedula||''} placeholder="402-0000000-0" /></div>
               <div className="field"><label>Correo (para notificaciones)</label><input name="email" type="email" defaultValue={t.email||''} placeholder="maestra@correo.com" /></div>
               <div className="two-col">
                 <div className="field"><label>Salario mensual</label><input name="salary" type="number" step="0.01" defaultValue={t.monthly_salary||''} /></div>
                 <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" defaultValue={t.hire_date||''} /></div>
               </div>
+              <div className="field"><label>Horario laboral</label><input name="workSchedule" defaultValue={t.work_schedule||''} placeholder="Ej. Lunes a Viernes AM y PM" /></div>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -1210,6 +1217,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div>
                   <p className="teacher-name">{t.name}</p>
                   <p className="teacher-meta">{disponibles} de {t.vacation_days_total||0} días disponibles {t.active?'':'· inactiva'}</p>
+                  {t.work_schedule && <p className="teacher-meta">{t.work_schedule}</p>}
+                  {t.cedula && <p className="teacher-meta">Cédula {t.cedula}</p>}
                   <p className="teacher-meta">
                     {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
                     {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
@@ -1520,9 +1529,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
                             <div>
                               <p className="li-title">{it.child_name}{it.active===false?' · inactivo':''}</p>
                               <p className="li-sub">{it.program}{it.schedule?` · ${it.schedule}`:''} · {fmtMoney(it.amount)}</p>
+                              <p className="li-sub">{it.teacher_name ? `Maestra: ${it.teacher_name}` : 'Sin maestra asignada'}</p>
                             </div>
                             <div className="row-actions">
-                              <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount })}><Icon name="edit" sw={1.6}/></button>
+                              <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount, teacherId:it.teacher_id })}><Icon name="edit" sw={1.6}/></button>
                               <button className="mini-btn" onClick={()=>toggleFamilyItemActive(it.id)} aria-label="Activar o desactivar">{it.active===false?<Icon name="check" sw={1.8}/>:<Icon name="x" sw={1.8}/>}</button>
                               <button className="mini-btn" onClick={()=>deleteFamilyItem(it.id)}><Icon name="trash" sw={1.6}/></button>
                             </div>
@@ -1537,6 +1547,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
                             <div className="field"><label>Monto</label><input name="amount" type="number" step="0.01" defaultValue={familyItemForm.amount||''} required /></div>
                           </div>
                           <div className="field"><label>Día y horario</label><input name="schedule" defaultValue={familyItemForm.schedule||''} placeholder="Ej. Martes y Jueves 3:00-6:00" /></div>
+                          <div className="field"><label>Maestra asignada</label>
+                            <select name="teacherId" defaultValue={familyItemForm.teacherId||''}>
+                              <option value="">Sin asignar</option>
+                              {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                          </div>
                           <div className="li-actions">
                             <button type="button" className="btn btn-ghost" onClick={()=>setFamilyItemForm(null)}>Cancelar</button>
                             <button type="submit" className="btn btn-primary">Guardar</button>
