@@ -769,6 +769,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   useEffect(()=>{ reload(); },[reload]);
 
+  useEffect(()=>{
+    const id = setInterval(reload, 20000);
+    return ()=>clearInterval(id);
+  },[reload]);
+
   async function reviewRequest(id, decision){
     const req = requests.find(r=>r.id===id);
     const { error } = await supabase.rpc('admin_review_request', { p_request_id:id, p_decision:decision });
