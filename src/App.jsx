@@ -7,7 +7,10 @@ const DEFAULT_VACATION_DAYS = 14;
 function fmtDate(iso){ if(!iso) return ''; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-DO',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 function fmtMonth(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(Number); return `${MONTHS_ES[m-1]} ${y}`; }
 function fmtMoney(n){ const num=Number(n)||0; return 'RD$ ' + num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+function todayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 function downloadCSV(filename, headers, rows){
   const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
@@ -20,11 +23,36 @@ function downloadCSV(filename, headers, rows){
   URL.revokeObjectURL(url);
 }
 
+function tiempoEnEmpresa(hireDateStr){
+  if(!hireDateStr) return null;
+  const start = new Date(hireDateStr+'T00:00:00');
+  const now = new Date();
+  let months = (now.getFullYear()-start.getFullYear())*12 + (now.getMonth()-start.getMonth());
+  if(now.getDate() < start.getDate()) months--;
+  if(months < 0) return null;
+  const years = Math.floor(months/12);
+  const rem = months%12;
+  if(years===0) return `${rem} mes${rem===1?'':'es'}`;
+  if(rem===0) return `${years} año${years===1?'':'s'}`;
+  return `${years} año${years===1?'':'s'}, ${rem} mes${rem===1?'':'es'}`;
+}
+
+async function sendNotification(to, subject, html){
+  if(!to) return;
+  try{
+    await supabase.functions.invoke('send-mail', {
+      body: { to, subject, html },
+      headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+    });
+  }catch(e){ console.error('email error', e); }
+}
+
 // Deducciones de nómina, República Dominicana (vigentes 2026)
 const AFP_RATE = 0.0287;
 const SFS_RATE = 0.0304;
-function calcularDeduccionesRD(brutoMensual){
+function calcularDeduccionesRD(brutoMensual, otrasDeducciones){
   const bruto = Number(brutoMensual) || 0;
+  const otras = Number(otrasDeducciones) || 0;
   const afp = bruto * AFP_RATE;
   const sfs = bruto * SFS_RATE;
   const gravableMensual = bruto - afp - sfs;
@@ -35,9 +63,9 @@ function calcularDeduccionesRD(brutoMensual){
   else if (anual <= 867123) isrAnual = 31216 + (anual - 624329) * 0.20;
   else isrAnual = 79776 + (anual - 867123) * 0.25;
   const isr = isrAnual / 12;
-  const deducciones = afp + sfs + isr;
+  const deducciones = afp + sfs + isr + otras;
   const neto = bruto - deducciones;
-  return { afp, sfs, isr, deducciones, neto };
+  return { afp, sfs, isr, otras, deducciones, neto };
 }
 
 const ICONS = {
@@ -54,7 +82,8 @@ const ICONS = {
   x:'<path d="M6 6l12 12M18 6L6 18"/>',
   chevron:'<path d="M9 6l6 6-6 6"/>',
   edit:'<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>',
-  trash:'<path d="M4.5 7h15M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M7 7l1 12.5A1.5 1.5 0 0 0 9.5 21h5a1.5 1.5 0 0 0 1.5-1.5L17 7"/>'
+  trash:'<path d="M4.5 7h15M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M7 7l1 12.5A1.5 1.5 0 0 0 9.5 21h5a1.5 1.5 0 0 0 1.5-1.5L17 7"/>',
+  user:'<circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 20c1.1-4.2 4-6.4 7.2-6.4s6.1 2.2 7.2 6.4"/>'
 };
 function Icon({ name, sw=1.8 }){
   return <span className="icon" dangerouslySetInnerHTML={{__html:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]||''}</svg>`}} />;
@@ -96,6 +125,7 @@ function Login({ onLogin, toast, Toast }){
   const [adminPin, setAdminPin] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [recoverBusy, setRecoverBusy] = useState(false);
 
   useEffect(()=>{
     supabase.rpc('list_active_teacher_names').then(({data, error})=>{
@@ -125,6 +155,29 @@ function Login({ onLogin, toast, Toast }){
     onLogin({ role:'admin', name:'Administración' });
   }
 
+  async function recoverTeacherPin(){
+    if(!teacherId){ toast('Selecciona tu nombre primero.'); return; }
+    setRecoverBusy(true);
+    const { data, error } = await supabase.rpc('request_teacher_pin_reset', { p_teacher_id: teacherId });
+    const r = data && data[0];
+    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    await sendNotification(r.email, 'Tu nuevo PIN de acceso a Sensi Portal',
+      `<p>Hola ${r.teacher_name},</p><p>Tu nuevo PIN de acceso es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
+    setRecoverBusy(false);
+    toast('Te enviamos un nuevo PIN a tu correo.');
+  }
+
+  async function recoverAdminPin(){
+    setRecoverBusy(true);
+    const { data, error } = await supabase.rpc('request_admin_pin_reset');
+    const r = data && data[0];
+    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    await sendNotification(r.email, 'Nuevo PIN de administración de Sensi Portal',
+      `<p>Tu nuevo PIN de administración es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
+    setRecoverBusy(false);
+    toast('Te enviamos un nuevo PIN al correo de recuperación.');
+  }
+
   return (
     <div className="app-shell login-screen">
       <BrandStrip />
@@ -152,6 +205,7 @@ function Login({ onLogin, toast, Toast }){
             </div>
             {error && <p className="error-msg">{error}</p>}
             <button className="btn btn-primary" type="submit" disabled={!teachers.length || busy}>{busy?'Entrando…':'Entrar'}</button>
+            <button type="button" className="link-btn" style={{marginTop:12}} disabled={recoverBusy} onClick={recoverTeacherPin}>¿Olvidaste tu PIN?</button>
             <p className="hint" style={{marginTop:14}}>¿No apareces en la lista o no tienes PIN? Pídele a la administración que te registre.</p>
           </form>
         ) : (
@@ -162,10 +216,50 @@ function Login({ onLogin, toast, Toast }){
             </div>
             {error && <p className="error-msg">{error}</p>}
             <button className="btn btn-warm" type="submit" disabled={busy}>{busy?'Entrando…':'Entrar'}</button>
+            <button type="button" className="link-btn" style={{marginTop:12}} disabled={recoverBusy} onClick={recoverAdminPin}>¿Olvidó el PIN de administración?</button>
           </form>
         )}
       </div>
       <Toast />
+    </div>
+  );
+}
+
+function weekDatesFor(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  const day = d.getDay(); // 0=Dom .. 6=Sáb
+  const mondayOffset = day===0 ? -6 : 1-day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate()+mondayOffset);
+  const days = [];
+  for(let i=0;i<7;i++){
+    const dt = new Date(monday);
+    dt.setDate(monday.getDate()+i);
+    days.push(`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`);
+  }
+  return days;
+}
+const WEEKDAY_LETTERS = ['L','M','M','J','V','S','D'];
+
+function WeekDayPicker({ value, onChange }){
+  const week = weekDatesFor(value);
+  const today = todayStr();
+  return (
+    <div className="week-strip">
+      {week.map((d,i)=>{
+        const dayNum = Number(d.slice(8,10));
+        const isSel = d===value;
+        return (
+          <button key={d} type="button" className={`week-pill${isSel?' active':''}${d===today?' today':''}`} onClick={()=>onChange(d)}>
+            <span className="week-pill-letter">{WEEKDAY_LETTERS[i]}</span>
+            <span className="week-pill-num">{dayNum}</span>
+          </button>
+        );
+      })}
+      <div className="date-icon-wrap">
+        <input type="date" className="date-icon-input" value={value} onChange={e=>onChange(e.target.value)} />
+        <span className="date-icon-visual"><Icon name="calendar" sw={1.6} /></span>
+      </div>
     </div>
   );
 }
@@ -219,18 +313,24 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [vacationEnabled, setVacationEnabled] = useState(false);
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [attBusy, setAttBusy] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [assignedChildren, setAssignedChildren] = useState([]);
 
   const reload = useCallback(async ()=>{
-    const [b, r, p, s] = await Promise.all([
+    const [b, r, p, s, a] = await Promise.all([
       supabase.rpc('get_teacher_balance', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_requests', { p_teacher_id: user.id }),
       supabase.rpc('get_teacher_payroll', { p_teacher_id: user.id }),
       supabase.rpc('get_public_settings'),
+      supabase.rpc('get_teacher_attendance', { p_teacher_id: user.id, p_date: todayStr() }),
     ]);
     if(b.data && b.data[0]) setBalance(b.data[0]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayroll(p.data);
     if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+    if(a.data) setAttendance(a.data);
   },[user.id]);
 
   useEffect(()=>{ reload(); },[reload]);
@@ -239,6 +339,39 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(view!=='calendario') return;
     supabase.rpc('get_calendar_day', { p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
   },[view, calDate]);
+
+  useEffect(()=>{
+    if(view!=='perfil') return;
+    supabase.rpc('get_teacher_profile', { p_teacher_id: user.id }).then(({data})=>{ if(data && data[0]) setProfile(data[0]); });
+    supabase.rpc('get_teacher_assigned_children', { p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
+  },[view, user.id]);
+
+  async function changeOwnPin(e){
+    e.preventDefault();
+    const f = e.target;
+    const p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
+    if(!/^\d{4}$/.test(p1)){ toast('El PIN debe ser de 4 dígitos.'); return; }
+    if(p1!==p2){ toast('Los PIN no coinciden.'); return; }
+    const { error } = await supabase.rpc('teacher_change_own_pin', { p_teacher_id:user.id, p_new_pin:p1 });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('PIN actualizado.');
+    f.reset();
+  }
+
+  async function markAttendance(type){
+    setAttBusy(true);
+    const { data, error } = await supabase.rpc('log_attendance', { p_teacher_id:user.id, p_type:type });
+    setAttBusy(false);
+    const result = data && data[0];
+    if(error || !result || !result.ok){ toast((result && result.message) || 'No se pudo registrar.'); return; }
+    toast(type==='entrada' ? 'Entrada registrada.' : 'Salida registrada.');
+    reload();
+  }
+
+  const entradaHoy = attendance.find(a=>a.type==='entrada');
+  const salidaHoy = attendance.find(a=>a.type==='salida');
+  const fmtHora = iso => iso ? new Date(iso).toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'}) : '';
+
 
   const disponibles = Math.max((balance.vacation_days_total||0)-(balance.vacation_days_used||0),0);
   const pct = balance.vacation_days_total ? Math.min(100, Math.round(((balance.vacation_days_used||0)/balance.vacation_days_total)*100)) : 0;
@@ -271,11 +404,25 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     const recent = requests.slice(0,3);
     content = (
       <>
-        <div className="hero-card">
-          <p className="hero-label">Días de vacaciones</p>
-          <div className="hero-figure"><span className="hero-number">{disponibles}</span><span className="hero-unit">disponibles de {balance.vacation_days_total||0}</span></div>
-          <div className="hero-bar"><div className="hero-bar-fill" style={{width:`${pct}%`}} /></div>
-          <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
+        {vacationEnabled && (
+          <div className="hero-card">
+            <p className="hero-label">Días de vacaciones</p>
+            <div className="hero-figure"><span className="hero-number">{disponibles}</span><span className="hero-unit">disponibles de {balance.vacation_days_total||0}</span></div>
+            <div className="hero-bar"><div className="hero-bar-fill" style={{width:`${pct}%`}} /></div>
+            <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
+          </div>
+        )}
+        <div className="form-card" style={{marginTop: vacationEnabled ? 16 : 0}}>
+          <p style={{fontWeight:600, fontSize:14.5, marginBottom:10}}>Asistencia de hoy</p>
+          <div className="quick-actions" style={{marginTop:0}}>
+            <button className="btn btn-primary" disabled={attBusy || !!entradaHoy} onClick={()=>markAttendance('entrada')}>
+              {entradaHoy ? `Entrada ${fmtHora(entradaHoy.logged_at)}` : 'Marcar entrada'}
+            </button>
+            <button className="btn btn-outline" disabled={attBusy || !entradaHoy || !!salidaHoy} onClick={()=>markAttendance('salida')}>
+              {salidaHoy ? `Salida ${fmtHora(salidaHoy.logged_at)}` : 'Marcar salida'}
+            </button>
+          </div>
+          <p className="hint" style={{marginTop:10}}>Solo funciona conectada al wifi de Sensi.</p>
         </div>
         <div className="quick-actions">
           {vacationEnabled && <button className="btn btn-primary" onClick={()=>setView('vacaciones')}>Pedir vacaciones</button>}
@@ -328,7 +475,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       <>
         <p className="section-title">Nómina mensual</p>
         <div className="export-row">
-          <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`nomina_${user.name}.csv`, ['Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`nomina_${user.name}.csv`, ['Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
           <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
         </div>
         {payroll.map(p=>(
@@ -343,7 +490,16 @@ function TeacherApp({ user, onLogout, toast, Toast }){
             {openNomina===p.id && (
               <div className="nomina-detail">
                 <div className="nomina-line"><span>Salario bruto</span><span>{fmtMoney(p.bruto)}</span></div>
-                <div className="nomina-line"><span>Deducciones</span><span>-{fmtMoney(p.deducciones)}</span></div>
+                {(p.afp||p.sfs||p.isr||p.other_deductions) ? (
+                  <>
+                    <div className="nomina-line"><span>AFP</span><span>-{fmtMoney(p.afp)}</span></div>
+                    <div className="nomina-line"><span>SFS</span><span>-{fmtMoney(p.sfs)}</span></div>
+                    <div className="nomina-line"><span>ISR</span><span>-{fmtMoney(p.isr)}</span></div>
+                    {p.other_deductions>0 && <div className="nomina-line"><span>Otras deducciones</span><span>-{fmtMoney(p.other_deductions)}</span></div>}
+                  </>
+                ) : (
+                  <div className="nomina-line"><span>Deducciones</span><span>-{fmtMoney(p.deducciones)}</span></div>
+                )}
                 <div className="nomina-line total"><span>Neto pagado</span><span>{fmtMoney(p.neto)}</span></div>
                 {p.nota && <p className="li-reason" style={{marginTop:10}}>{p.nota}</p>}
               </div>
@@ -356,9 +512,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     content = (
       <>
         <p className="section-title">Calendario del día</p>
-        <div className="day-picker">
-          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-        </div>
+        <WeekDayPicker value={calDate} onChange={setCalDate} />
         {calEntries.length ? calEntries.map(c=>(
           <div key={c.id} className="cal-entry">
             <p className="li-title">{c.teacher_name}</p>
@@ -366,6 +520,37 @@ function TeacherApp({ user, onLogout, toast, Toast }){
             {c.notes && <p className="li-reason">{c.notes}</p>}
           </div>
         )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+      </>
+    );
+  } else if(view==='perfil'){
+    const tiempo = profile ? tiempoEnEmpresa(profile.hire_date) : null;
+    content = (
+      <>
+        <p className="section-title">Mi perfil</p>
+        <div className="form-card">
+          <p style={{fontWeight:600, fontSize:17, fontFamily:'Fredoka'}}>{profile?.name || user.name}</p>
+          {profile?.email && <p className="teacher-meta" style={{marginTop:4}}>{profile.email}</p>}
+          <p className="teacher-meta" style={{marginTop:8}}>
+            {profile?.hire_date ? `Desde ${fmtDate(profile.hire_date)}` : 'Fecha de entrada no registrada'}
+            {tiempo ? ` · ${tiempo} en Sensi` : ''}
+          </p>
+          <p className="teacher-meta" style={{marginTop:4}}>
+            {profile?.monthly_salary ? `Sueldo actual: ${fmtMoney(profile.monthly_salary)} /mes` : 'Sueldo no registrado'}
+          </p>
+        </div>
+        <p className="section-title">Niños asignados</p>
+        {assignedChildren.length ? assignedChildren.map((c,i)=>(
+          <div key={i} className="list-item">
+            <p className="li-title">{c.child_name}</p>
+            {c.horario && <p className="li-sub">{c.horario}</p>}
+          </div>
+        )) : <div className="empty-state">No tienes niños asignados en el calendario todavía.</div>}
+        <p className="section-title">Cambiar mi PIN</p>
+        <form className="form-card" onSubmit={changeOwnPin}>
+          <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
+          <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
+          <button className="btn btn-primary" type="submit">Actualizar PIN</button>
+        </form>
       </>
     );
   }
@@ -380,9 +565,45 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         <button className={`nav-btn${view==='permisos'?' active':''}`} onClick={()=>setView('permisos')}><Icon name="calendar"/><span>Permisos</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
         <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="users"/><span>Calendario</span></button>
+        <button className={`nav-btn${view==='perfil'?' active':''}`} onClick={()=>setView('perfil')}><Icon name="user"/><span>Perfil</span></button>
       </nav>
       <Toast />
     </div>
+  );
+}
+
+function PayrollFormFields({ f, teachers, onSubmit, onCancel }){
+  const [bruto, setBruto] = useState(f.bruto || '');
+  const [otras, setOtras] = useState(f.otras || '');
+  const calc = calcularDeduccionesRD(Number(bruto)||0, Number(otras)||0);
+  return (
+    <form className="form-card" style={{marginBottom:16}} onSubmit={onSubmit}>
+      <div className="field"><label>Maestra</label>
+        <select name="teacherId" defaultValue={f.teacherId}>
+          {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Mes</label><input name="month" type="month" defaultValue={f.month} required /></div>
+      <div className="two-col">
+        <div className="field"><label>Salario bruto</label><input name="bruto" type="number" step="0.01" value={bruto} onChange={e=>setBruto(e.target.value)} required /></div>
+        <div className="field"><label>Otras deducciones (opcional)</label><input name="otras" type="number" step="0.01" value={otras} onChange={e=>setOtras(e.target.value)} placeholder="0" /></div>
+      </div>
+      {Number(bruto)>0 && (
+        <div className="form-card" style={{background:'var(--bg)', marginBottom:16}}>
+          <div className="nomina-line"><span>AFP (2.87%)</span><span>{fmtMoney(calc.afp)}</span></div>
+          <div className="nomina-line"><span>SFS (3.04%)</span><span>{fmtMoney(calc.sfs)}</span></div>
+          <div className="nomina-line"><span>ISR (DGII)</span><span>{fmtMoney(calc.isr)}</span></div>
+          {Number(otras)>0 && <div className="nomina-line"><span>Otras deducciones</span><span>{fmtMoney(calc.otras)}</span></div>}
+          <div className="nomina-line total"><span>Neto</span><span>{fmtMoney(calc.neto)}</span></div>
+        </div>
+      )}
+      <div className="field"><label>Fecha de pago</label><input name="fechaPago" type="date" defaultValue={f.fechaPago} /></div>
+      <div className="field"><label>Nota (opcional)</label><textarea name="nota" defaultValue={f.nota} /></div>
+      <div className="li-actions">
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
+        <button type="submit" className="btn btn-primary">Guardar</button>
+      </div>
+    </form>
   );
 }
 
@@ -408,6 +629,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [calForm, setCalForm] = useState(null);
+  const [officeIp, setOfficeIp] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [showAttendance, setShowAttendance] = useState(false);
+  const [attendanceDay, setAttendanceDay] = useState([]);
   const [calBulkOpen, setCalBulkOpen] = useState(false);
   const [calBulkStart, setCalBulkStart] = useState(todayStr());
   const [calBulkEnd, setCalBulkEnd] = useState(todayStr());
@@ -426,7 +651,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
     if(p.data) setPayroll(p.data);
-    if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+    if(s.data && s.data[0]){ setVacationEnabled(!!s.data[0].vacation_requests_enabled); setOfficeIp(s.data[0].office_ip||''); setAdminEmail(s.data[0].admin_email||''); }
   },[]);
 
   const reloadCalendar = useCallback(async ()=>{
@@ -435,6 +660,30 @@ function AdminApp({ user, onLogout, toast, Toast }){
   },[calDate]);
 
   useEffect(()=>{ if(view==='calendario') reloadCalendar(); },[view, calDate, reloadCalendar]);
+
+  useEffect(()=>{
+    if(view==='calendario' && showAttendance){
+      supabase.rpc('admin_list_attendance_day', { p_date: calDate }).then(({data})=>{ if(data) setAttendanceDay(data); });
+    }
+  },[view, calDate, showAttendance]);
+
+  async function detectMyIp(){
+    const { data, error } = await supabase.rpc('get_my_ip');
+    if(error || !data){ toast('No se pudo detectar la IP.'); return; }
+    setOfficeIp(data);
+  }
+
+  async function saveOfficeIp(){
+    const { error } = await supabase.rpc('admin_set_office_ip', { p_ip: officeIp.trim() });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('IP del centro guardada.');
+  }
+
+  async function saveAdminEmail(){
+    const { error } = await supabase.rpc('admin_set_recovery_email', { p_email: adminEmail.trim() });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('Correo de recuperación guardado.');
+  }
 
   async function toggleVacationEnabled(){
     const next = !vacationEnabled;
@@ -520,10 +769,24 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   useEffect(()=>{ reload(); },[reload]);
 
+  useEffect(()=>{
+    const id = setInterval(reload, 20000);
+    return ()=>clearInterval(id);
+  },[reload]);
+
   async function reviewRequest(id, decision){
+    const req = requests.find(r=>r.id===id);
     const { error } = await supabase.rpc('admin_review_request', { p_request_id:id, p_decision:decision });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast(decision==='aprobado' ? 'Solicitud aprobada.' : 'Solicitud rechazada.');
+    if(req){
+      const teacher = teachers.find(t=>t.id===req.teacher_id);
+      const tipo = req.type==='vacacion' ? 'solicitud de vacaciones' : 'solicitud de permiso';
+      const rango = req.type==='vacacion' ? `${fmtDate(req.start_date)} – ${fmtDate(req.end_date)}` : fmtDate(req.perm_date);
+      const estado = decision==='aprobado' ? 'aprobada' : 'rechazada';
+      sendNotification(teacher?.email, `Tu ${tipo} fue ${estado}`,
+        `<p>Hola ${teacher?.name||''},</p><p>Tu ${tipo} para <strong>${rango}</strong> fue <strong>${estado}</strong>.</p><p>— Sensi Portal</p>`);
+    }
     reload();
   }
 
@@ -531,9 +794,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const name = f.name.value.trim(), pin = f.pin.value.trim(), vac = Number(f.vacDays.value)||DEFAULT_VACATION_DAYS;
+    const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -544,9 +808,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const name=f.name.value.trim(), pin=f.pin.value.trim(), vac=Number(f.vacDays.value), used=Number(f.vacUsed.value);
+    const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0 });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -563,17 +828,21 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const teacherId = f.teacherId.value, month = f.month.value;
-    const bruto = Number(f.bruto.value)||0, deducciones = Number(f.deducciones.value)||0;
-    const neto = Number(f.neto.value)|| (bruto-deducciones);
+    const bruto = Number(f.bruto.value)||0, otras = Number(f.otras.value)||0;
+    const calc = calcularDeduccionesRD(bruto, otras);
     const fechaPago = f.fechaPago.value, nota = f.nota.value.trim();
     if(!teacherId||!month){ toast('Selecciona maestra y mes.'); return; }
     const { error } = await supabase.rpc('admin_save_payroll', {
       p_payroll_id: payrollForm.id || null, p_teacher_id:teacherId, p_month:month,
-      p_bruto:bruto, p_deducciones:deducciones, p_neto:neto, p_fecha_pago:fechaPago||null, p_nota:nota
+      p_bruto:bruto, p_afp:calc.afp, p_sfs:calc.sfs, p_isr:calc.isr, p_other_deductions:otras,
+      p_neto:calc.neto, p_fecha_pago:fechaPago||null, p_nota:nota
     });
     if(error){ toast(error.message.includes('duplicate') ? 'Ya existe una nómina para esa maestra en ese mes.' : 'No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Nómina guardada.');
     setPayrollForm(null);
+    const teacher = teachers.find(t=>t.id===teacherId);
+    sendNotification(teacher?.email, `Tu nómina de ${fmtMonth(month)} ya está disponible`,
+      `<p>Hola ${teacher?.name||''},</p><p>Tu nómina de <strong>${fmtMonth(month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     reload();
   }
 
@@ -583,11 +852,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
       const parts = line.split(',');
       const rawName = (parts[0]||'').trim();
       const bruto = Number((parts[1]||'').replace(/[^\d.]/g,'')) || 0;
+      const otras = Number((parts[2]||'').replace(/[^\d.]/g,'')) || 0;
       const nameLower = rawName.toLowerCase();
       let teacher = teachers.find(t=>t.name.toLowerCase()===nameLower);
       if(!teacher) teacher = teachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
-      const calc = bruto ? calcularDeduccionesRD(bruto) : null;
-      return { rawName, bruto, teacher, calc };
+      const calc = bruto ? calcularDeduccionesRD(bruto, otras) : null;
+      return { rawName, bruto, otras, teacher, calc };
     });
     setBulkPreview(rows);
   }
@@ -598,13 +868,16 @@ function AdminApp({ user, onLogout, toast, Toast }){
     let ok=0, fail=0;
     for(const row of bulkPreview){
       if(!row.teacher || !row.bruto){ fail++; continue; }
-      const nota = `AFP: ${fmtMoney(row.calc.afp)} (2.87%) · SFS: ${fmtMoney(row.calc.sfs)} (3.04%) · ISR: ${fmtMoney(row.calc.isr)}`;
+      const nota = row.otras ? `Otras deducciones: ${fmtMoney(row.otras)}` : '';
       const { error } = await supabase.rpc('admin_save_payroll', {
         p_payroll_id: null, p_teacher_id: row.teacher.id, p_month: bulkMonth,
-        p_bruto: row.bruto, p_deducciones: row.calc.deducciones, p_neto: row.calc.neto,
-        p_fecha_pago: bulkFecha || null, p_nota: nota
+        p_bruto: row.bruto, p_afp: row.calc.afp, p_sfs: row.calc.sfs, p_isr: row.calc.isr,
+        p_other_deductions: row.otras, p_neto: row.calc.neto, p_fecha_pago: bulkFecha || null, p_nota: nota
       });
-      if(error) fail++; else ok++;
+      if(error){ fail++; continue; }
+      ok++;
+      sendNotification(row.teacher.email, `Tu nómina de ${fmtMonth(bulkMonth)} ya está disponible`,
+        `<p>Hola ${row.teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(bulkMonth)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(row.calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     }
     setBulkBusy(false);
     toast(fail ? `${ok} guardadas, ${fail} con error (revisa nombres no encontrados).` : `${ok} nóminas guardadas.`);
@@ -700,6 +973,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>PIN (4 dígitos)</label><input name="pin" inputMode="numeric" maxLength={4} placeholder="1234" required /></div>
               <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={DEFAULT_VACATION_DAYS} /></div>
             </div>
+            <div className="field"><label>Correo (para notificaciones, opcional)</label><input name="email" type="email" placeholder="maestra@correo.com" /></div>
+            <div className="two-col">
+              <div className="field"><label>Salario mensual (opcional)</label><input name="salary" type="number" step="0.01" placeholder="25000" /></div>
+              <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" /></div>
+            </div>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>setAddingTeacher(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary">Guardar maestra</button>
@@ -715,6 +993,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={t.vacation_days_total||0} /></div>
               </div>
               <div className="field"><label>Días ya usados</label><input name="vacUsed" type="number" min="0" defaultValue={t.vacation_days_used||0} /></div>
+              <div className="field"><label>Correo (para notificaciones)</label><input name="email" type="email" defaultValue={t.email||''} placeholder="maestra@correo.com" /></div>
+              <div className="two-col">
+                <div className="field"><label>Salario mensual</label><input name="salary" type="number" step="0.01" defaultValue={t.monthly_salary||''} /></div>
+                <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" defaultValue={t.hire_date||''} /></div>
+              </div>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -722,12 +1005,19 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </form>
           );
           const disponibles = Math.max((t.vacation_days_total||0)-(t.vacation_days_used||0),0);
+          const tiempo = tiempoEnEmpresa(t.hire_date);
           return (
             <div key={t.id} className={`teacher-row${t.active?'':' inactive'}`}>
               <div className="teacher-row-top">
                 <div>
                   <p className="teacher-name">{t.name}</p>
                   <p className="teacher-meta">{disponibles} de {t.vacation_days_total||0} días disponibles {t.active?'':'· inactiva'}</p>
+                  <p className="teacher-meta">
+                    {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
+                    {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
+                    {tiempo ? ` · ${tiempo} en Sensi` : ''}
+                  </p>
+                  {t.email && <p className="teacher-meta">{t.email}</p>}
                 </div>
                 <div className="row-actions">
                   <button className="mini-btn" onClick={()=>{setEditingTeacherId(t.id); setAddingTeacher(false);}} aria-label="Editar"><Icon name="edit" sw={1.6}/></button>
@@ -749,26 +1039,26 @@ function AdminApp({ user, onLogout, toast, Toast }){
           {!f && !bulkOpen && (
             <div style={{display:'flex',gap:8}}>
               <button className="btn btn-outline btn-sm" onClick={()=>{setBulkOpen(true); setBulkPreview(null);}}>Carga masiva</button>
-              <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', deducciones:'', neto:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
+              <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', otras:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
             </div>
           )}
         </div>
         {!f && !bulkOpen && payroll.length>0 && (
           <div className="export-row">
-            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
             <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
           </div>
         )}
         {bulkOpen && (
           <div className="form-card" style={{marginBottom:16}}>
-            <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto</strong>. Ejemplo: <em>Rossella, 25000</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
+            <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto, otras deducciones (opcional)</strong>. Ejemplo: <em>Rossella, 25000, 500</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
             <div className="two-col">
               <div className="field"><label>Mes</label><input type="month" value={bulkMonth} onChange={e=>setBulkMonth(e.target.value)} /></div>
               <div className="field"><label>Fecha de pago</label><input type="date" value={bulkFecha} onChange={e=>setBulkFecha(e.target.value)} /></div>
             </div>
             <div className="field">
               <label>Lista (una maestra por línea)</label>
-              <textarea rows={5} value={bulkText} onChange={e=>{setBulkText(e.target.value); setBulkPreview(null);}} placeholder={'Rossella, 25000\nAna Pérez, 30000'} />
+              <textarea rows={5} value={bulkText} onChange={e=>{setBulkText(e.target.value); setBulkPreview(null);}} placeholder={'Rossella, 25000, 500\nAna Pérez, 30000'} />
             </div>
             {!bulkPreview ? (
               <div className="li-actions">
@@ -783,7 +1073,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                     <div className="li-top">
                       <div>
                         <p className="li-title">{row.rawName || '(sin nombre)'}{row.teacher ? ` → ${row.teacher.name}` : ' — no encontrada'}</p>
-                        {row.calc && <p className="li-sub">Bruto {fmtMoney(row.bruto)} · Neto {fmtMoney(row.calc.neto)}</p>}
+                        {row.calc && <p className="li-sub">Bruto {fmtMoney(row.bruto)}{row.otras>0?` · Otras ${fmtMoney(row.otras)}`:''} · Neto {fmtMoney(row.calc.neto)}</p>}
                       </div>
                     </div>
                     {row.calc && <p className="li-reason">AFP {fmtMoney(row.calc.afp)} · SFS {fmtMoney(row.calc.sfs)} · ISR {fmtMoney(row.calc.isr)}</p>}
@@ -799,31 +1089,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
           </div>
         )}
         {f && (
-          <form className="form-card" style={{marginBottom:16}} onSubmit={savePayrollForm} onChange={(e)=>{
-            if(e.target.name==='bruto' || e.target.name==='deducciones'){
-              const form = e.target.form;
-              const bruto = Number(form.bruto.value)||0, ded = Number(form.deducciones.value)||0;
-              form.neto.value = (bruto-ded).toFixed(2);
-            }
-          }}>
-            <div className="field"><label>Maestra</label>
-              <select name="teacherId" defaultValue={f.teacherId}>
-                {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Mes</label><input name="month" type="month" defaultValue={f.month} required /></div>
-            <div className="two-col">
-              <div className="field"><label>Salario bruto</label><input name="bruto" type="number" step="0.01" defaultValue={f.bruto} required /></div>
-              <div className="field"><label>Deducciones</label><input name="deducciones" type="number" step="0.01" defaultValue={f.deducciones} /></div>
-            </div>
-            <div className="field"><label>Salario neto</label><input name="neto" type="number" step="0.01" defaultValue={f.neto} /></div>
-            <div className="field"><label>Fecha de pago</label><input name="fechaPago" type="date" defaultValue={f.fechaPago} /></div>
-            <div className="field"><label>Nota (opcional)</label><textarea name="nota" defaultValue={f.nota} /></div>
-            <div className="li-actions">
-              <button type="button" className="btn btn-ghost" onClick={()=>setPayrollForm(null)}>Cancelar</button>
-              <button type="submit" className="btn btn-primary">Guardar</button>
-            </div>
-          </form>
+          <PayrollFormFields f={f} teachers={teachers} onSubmit={savePayrollForm} onCancel={()=>setPayrollForm(null)} />
         )}
         {payroll.length ? payroll.map(p=>(
           <div key={p.id} className="list-item">
@@ -833,7 +1099,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <p className="li-sub" style={{textTransform:'capitalize'}}>{fmtMonth(p.month)} · Neto {fmtMoney(p.neto)}</p>
               </div>
               <div className="row-actions">
-                <button className="mini-btn" onClick={()=>setPayrollForm({ id:p.id, teacherId:p.teacher_id, month:p.month, bruto:p.bruto, deducciones:p.deducciones, neto:p.neto, fechaPago:p.fecha_pago, nota:p.nota||'' })}><Icon name="edit" sw={1.6}/></button>
+                <button className="mini-btn" onClick={()=>setPayrollForm({ id:p.id, teacherId:p.teacher_id, month:p.month, bruto:p.bruto, otras:p.other_deductions||0, fechaPago:p.fecha_pago, nota:p.nota||'' })}><Icon name="edit" sw={1.6}/></button>
                 <button className="mini-btn" onClick={()=>deletePayroll(p.id)}><Icon name="trash" sw={1.6}/></button>
               </div>
             </div>
@@ -844,16 +1110,26 @@ function AdminApp({ user, onLogout, toast, Toast }){
   } else if(view==='calendario'){
     content = (
       <>
-        <p className="section-title">Calendario</p>
-        <div className="day-picker">
-          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-          {!calForm && !calBulkOpen && (
-            <div style={{display:'flex',gap:8}}>
-              <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
-              <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
-            </div>
-          )}
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:0}}>
+          <p className="section-title" style={{margin:0}}>{showAttendance ? 'Asistencia del día' : 'Calendario'}</p>
+          <button className="link-btn" onClick={()=>setShowAttendance(!showAttendance)}>{showAttendance ? 'Ver horarios' : 'Ver asistencia'}</button>
         </div>
+        <WeekDayPicker value={calDate} onChange={setCalDate} />
+        {!showAttendance && !calForm && !calBulkOpen && (
+          <div style={{display:'flex',gap:8, marginBottom:16, marginTop:-8}}>
+            <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
+            <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
+          </div>
+        )}
+        {showAttendance ? (
+          attendanceDay.length ? attendanceDay.map((a,i)=>(
+            <div key={i} className="summary-row">
+              <span>{a.teacher_name}</span>
+              <span style={{color:'var(--text-muted)',fontSize:13}}>{a.type==='entrada'?'Entrada':'Salida'} · {new Date(a.logged_at).toLocaleTimeString('es-DO',{hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+          )) : <div className="empty-state">Nadie ha marcado entrada o salida este día.</div>
+        ) : (
+        <>
         {calBulkOpen && (
           <div className="form-card" style={{marginBottom:16}}>
             <p className="hint" style={{marginBottom:10}}>Define el rango de fechas y los días que se repite, y pega una línea por niño: <strong>Maestra, Niño, Horario</strong>. Ejemplo: <em>Rossella, Piero, 9:00am-10:00am</em>. Se crea automático para cada día del rango que coincida.</p>
@@ -927,6 +1203,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </div>
           </div>
         )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+        </>
+        )}
       </>
     );
   } else if(view==='ajustes'){
@@ -946,6 +1224,21 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
           <button className="btn btn-primary" type="submit">Actualizar PIN</button>
         </form>
+        <p className="section-title">Correo de recuperación del PIN de administración</p>
+        <div className="form-card">
+          <div className="field"><label>Correo</label><input type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} placeholder="admin@correo.com" /></div>
+          <p className="hint" style={{marginBottom:12}}>Si olvidas el PIN de administración, el nuevo se envía a este correo.</p>
+          <button className="btn btn-primary" onClick={saveAdminEmail}>Guardar</button>
+        </div>
+        <p className="section-title">Red de Sensi (para el log de entrada/salida)</p>
+        <div className="form-card">
+          <div className="field"><label>IP pública del centro</label><input value={officeIp} onChange={e=>setOfficeIp(e.target.value)} placeholder="Ej. 190.123.45.67" /></div>
+          <p className="hint" style={{marginBottom:12}}>Estando conectado al wifi de Sensi, dale "Detectar mi IP" para llenarlo solo.</p>
+          <div className="li-actions">
+            <button className="btn btn-ghost" onClick={detectMyIp}>Detectar mi IP</button>
+            <button className="btn btn-primary" onClick={saveOfficeIp}>Guardar</button>
+          </div>
+        </div>
         <p className="hint" style={{marginTop:18}}>Los datos se guardan en una base de datos de Supabase propia de este proyecto — no dependen de Claude ni de ninguna cuenta para funcionar.</p>
       </>
     );
