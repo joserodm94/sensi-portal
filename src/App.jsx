@@ -82,7 +82,8 @@ const ICONS = {
   x:'<path d="M6 6l12 12M18 6L6 18"/>',
   chevron:'<path d="M9 6l6 6-6 6"/>',
   edit:'<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>',
-  trash:'<path d="M4.5 7h15M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M7 7l1 12.5A1.5 1.5 0 0 0 9.5 21h5a1.5 1.5 0 0 0 1.5-1.5L17 7"/>'
+  trash:'<path d="M4.5 7h15M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M7 7l1 12.5A1.5 1.5 0 0 0 9.5 21h5a1.5 1.5 0 0 0 1.5-1.5L17 7"/>',
+  user:'<circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 20c1.1-4.2 4-6.4 7.2-6.4s6.1 2.2 7.2 6.4"/>'
 };
 function Icon({ name, sw=1.8 }){
   return <span className="icon" dangerouslySetInnerHTML={{__html:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]||''}</svg>`}} />;
@@ -124,6 +125,7 @@ function Login({ onLogin, toast, Toast }){
   const [adminPin, setAdminPin] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [recoverBusy, setRecoverBusy] = useState(false);
 
   useEffect(()=>{
     supabase.rpc('list_active_teacher_names').then(({data, error})=>{
@@ -153,6 +155,29 @@ function Login({ onLogin, toast, Toast }){
     onLogin({ role:'admin', name:'Administración' });
   }
 
+  async function recoverTeacherPin(){
+    if(!teacherId){ toast('Selecciona tu nombre primero.'); return; }
+    setRecoverBusy(true);
+    const { data, error } = await supabase.rpc('request_teacher_pin_reset', { p_teacher_id: teacherId });
+    const r = data && data[0];
+    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    await sendNotification(r.email, 'Tu nuevo PIN de acceso a Sensi Portal',
+      `<p>Hola ${r.teacher_name},</p><p>Tu nuevo PIN de acceso es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
+    setRecoverBusy(false);
+    toast('Te enviamos un nuevo PIN a tu correo.');
+  }
+
+  async function recoverAdminPin(){
+    setRecoverBusy(true);
+    const { data, error } = await supabase.rpc('request_admin_pin_reset');
+    const r = data && data[0];
+    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    await sendNotification(r.email, 'Nuevo PIN de administración de Sensi Portal',
+      `<p>Tu nuevo PIN de administración es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
+    setRecoverBusy(false);
+    toast('Te enviamos un nuevo PIN al correo de recuperación.');
+  }
+
   return (
     <div className="app-shell login-screen">
       <BrandStrip />
@@ -180,6 +205,7 @@ function Login({ onLogin, toast, Toast }){
             </div>
             {error && <p className="error-msg">{error}</p>}
             <button className="btn btn-primary" type="submit" disabled={!teachers.length || busy}>{busy?'Entrando…':'Entrar'}</button>
+            <button type="button" className="link-btn" style={{marginTop:12}} disabled={recoverBusy} onClick={recoverTeacherPin}>¿Olvidaste tu PIN?</button>
             <p className="hint" style={{marginTop:14}}>¿No apareces en la lista o no tienes PIN? Pídele a la administración que te registre.</p>
           </form>
         ) : (
@@ -190,6 +216,7 @@ function Login({ onLogin, toast, Toast }){
             </div>
             {error && <p className="error-msg">{error}</p>}
             <button className="btn btn-warm" type="submit" disabled={busy}>{busy?'Entrando…':'Entrar'}</button>
+            <button type="button" className="link-btn" style={{marginTop:12}} disabled={recoverBusy} onClick={recoverAdminPin}>¿Olvidó el PIN de administración?</button>
           </form>
         )}
       </div>
@@ -288,6 +315,8 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [calEntries, setCalEntries] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [attBusy, setAttBusy] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [assignedChildren, setAssignedChildren] = useState([]);
 
   const reload = useCallback(async ()=>{
     const [b, r, p, s, a] = await Promise.all([
@@ -310,6 +339,12 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(view!=='calendario') return;
     supabase.rpc('get_calendar_day', { p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
   },[view, calDate]);
+
+  useEffect(()=>{
+    if(view!=='perfil') return;
+    supabase.rpc('get_teacher_profile', { p_teacher_id: user.id }).then(({data})=>{ if(data && data[0]) setProfile(data[0]); });
+    supabase.rpc('get_teacher_assigned_children', { p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
+  },[view, user.id]);
 
   async function markAttendance(type){
     setAttBusy(true);
@@ -475,6 +510,31 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
       </>
     );
+  } else if(view==='perfil'){
+    const tiempo = profile ? tiempoEnEmpresa(profile.hire_date) : null;
+    content = (
+      <>
+        <p className="section-title">Mi perfil</p>
+        <div className="form-card">
+          <p style={{fontWeight:600, fontSize:17, fontFamily:'Fredoka'}}>{profile?.name || user.name}</p>
+          {profile?.email && <p className="teacher-meta" style={{marginTop:4}}>{profile.email}</p>}
+          <p className="teacher-meta" style={{marginTop:8}}>
+            {profile?.hire_date ? `Desde ${fmtDate(profile.hire_date)}` : 'Fecha de entrada no registrada'}
+            {tiempo ? ` · ${tiempo} en Sensi` : ''}
+          </p>
+          <p className="teacher-meta" style={{marginTop:4}}>
+            {profile?.monthly_salary ? `Sueldo actual: ${fmtMoney(profile.monthly_salary)} /mes` : 'Sueldo no registrado'}
+          </p>
+        </div>
+        <p className="section-title">Niños asignados</p>
+        {assignedChildren.length ? assignedChildren.map((c,i)=>(
+          <div key={i} className="list-item">
+            <p className="li-title">{c.child_name}</p>
+            {c.horario && <p className="li-sub">{c.horario}</p>}
+          </div>
+        )) : <div className="empty-state">No tienes niños asignados en el calendario todavía.</div>}
+      </>
+    );
   }
 
   return (
@@ -487,6 +547,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         <button className={`nav-btn${view==='permisos'?' active':''}`} onClick={()=>setView('permisos')}><Icon name="calendar"/><span>Permisos</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
         <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="users"/><span>Calendario</span></button>
+        <button className={`nav-btn${view==='perfil'?' active':''}`} onClick={()=>setView('perfil')}><Icon name="user"/><span>Perfil</span></button>
       </nav>
       <Toast />
     </div>
@@ -551,6 +612,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [calEntries, setCalEntries] = useState([]);
   const [calForm, setCalForm] = useState(null);
   const [officeIp, setOfficeIp] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
   const [showAttendance, setShowAttendance] = useState(false);
   const [attendanceDay, setAttendanceDay] = useState([]);
   const [calBulkOpen, setCalBulkOpen] = useState(false);
@@ -571,7 +633,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
     if(p.data) setPayroll(p.data);
-    if(s.data && s.data[0]){ setVacationEnabled(!!s.data[0].vacation_requests_enabled); setOfficeIp(s.data[0].office_ip||''); }
+    if(s.data && s.data[0]){ setVacationEnabled(!!s.data[0].vacation_requests_enabled); setOfficeIp(s.data[0].office_ip||''); setAdminEmail(s.data[0].admin_email||''); }
   },[]);
 
   const reloadCalendar = useCallback(async ()=>{
@@ -597,6 +659,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const { error } = await supabase.rpc('admin_set_office_ip', { p_ip: officeIp.trim() });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('IP del centro guardada.');
+  }
+
+  async function saveAdminEmail(){
+    const { error } = await supabase.rpc('admin_set_recovery_email', { p_email: adminEmail.trim() });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('Correo de recuperación guardado.');
   }
 
   async function toggleVacationEnabled(){
@@ -1133,6 +1201,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
           <button className="btn btn-primary" type="submit">Actualizar PIN</button>
         </form>
+        <p className="section-title">Correo de recuperación del PIN de administración</p>
+        <div className="form-card">
+          <div className="field"><label>Correo</label><input type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} placeholder="admin@correo.com" /></div>
+          <p className="hint" style={{marginBottom:12}}>Si olvidas el PIN de administración, el nuevo se envía a este correo.</p>
+          <button className="btn btn-primary" onClick={saveAdminEmail}>Guardar</button>
+        </div>
         <p className="section-title">Red de Sensi (para el log de entrada/salida)</p>
         <div className="form-card">
           <div className="field"><label>IP pública del centro</label><input value={officeIp} onChange={e=>setOfficeIp(e.target.value)} placeholder="Ej. 190.123.45.67" /></div>
