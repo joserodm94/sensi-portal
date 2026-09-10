@@ -7,6 +7,7 @@ const DEFAULT_VACATION_DAYS = 14;
 function fmtDate(iso){ if(!iso) return ''; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-DO',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 function fmtMonth(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(Number); return `${MONTHS_ES[m-1]} ${y}`; }
 function fmtMoney(n){ const num=Number(n)||0; return 'RD$ ' + num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtNum(n){ const num=Number(n)||0; return num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function todayStr(){
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -35,6 +36,62 @@ function tiempoEnEmpresa(hireDateStr){
   if(years===0) return `${rem} mes${rem===1?'':'es'}`;
   if(rem===0) return `${years} año${years===1?'':'s'}`;
   return `${years} año${years===1?'':'s'}, ${rem} mes${rem===1?'':'es'}`;
+}
+
+const BRAND_STRIP_HTML = `
+  <table width="100%" style="margin-top:24px;"><tr>
+    <td style="background:#D2564F; height:6px; width:20%;"></td>
+    <td style="background:#E58A32; height:6px; width:20%;"></td>
+    <td style="background:#EAB13B; height:6px; width:20%;"></td>
+    <td style="background:#A6C548; height:6px; width:20%;"></td>
+    <td style="background:#4A93C9; height:6px; width:20%;"></td>
+  </tr></table>`;
+
+function buildReceiptHtml(r){
+  const items = r.items_snapshot || [];
+  const rows = items.map(it=>`
+    <tr>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px;">
+        ${it.child_name} - ${fmtMonth(r.billing_month)}<br>
+        <span style="font-size:11px; color:#888888;">${it.schedule||''}</span>
+      </td>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px; text-align:center;">${it.program}</td>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px; text-align:right;">${fmtNum(it.amount)}</td>
+    </tr>`).join('');
+  return `
+  <div style="border:1px solid #999; padding:20px; font-family:Georgia,serif; max-width:600px;">
+    <table width="100%" style="border-collapse:collapse;">
+      <tr>
+        <td style="vertical-align:top;">
+          <div style="font-weight:bold; color:#2B2B2B; font-size:16px;">Sensi SRL</div>
+          <div style="color:#6E6E6E; font-size:12px;">RNC: 1-3359263-2</div>
+          <div style="color:#6E6E6E; font-size:12px;">Santo Domingo, República Dominicana</div>
+        </td>
+        <td style="vertical-align:top; text-align:right;">
+          <div style="font-size:26px; color:#2B2B2B;">RECIBO DE PAGO</div>
+          <div style="font-size:13px; color:#6E6E6E;">N&deg;: <b style="color:#2B2B2B;">${r.receipt_number}</b></div>
+          <div style="font-size:13px; color:#6E6E6E;">Ref. factura: <b style="color:#2B2B2B;">${r.invoice_number}</b></div>
+          <div style="font-size:13px; color:#6E6E6E;">Fecha de pago: <b style="color:#2B2B2B;">${fmtDate(r.payment_date)}</b></div>
+        </td>
+      </tr>
+    </table>
+    <hr style="border:none; border-top:1px solid #ddd; margin:16px 0;">
+    <div style="font-size:12px; color:#6E6E6E; font-weight:bold;">RECIBIMOS DE</div>
+    <div style="font-size:14px; color:#2B2B2B;">${r.tutor_name}</div>
+    <table width="100%" style="border-collapse:collapse; margin-top:16px;">
+      <tr style="background:#DCE3EA;">
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B;">DESCRIPCIÓN</td>
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B; text-align:center;">PROGRAMA</td>
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B; text-align:right;">IMPORTE (RD$)</td>
+      </tr>
+      ${rows}
+    </table>
+    <table width="100%" style="margin-top:10px;">
+      <tr><td style="font-size:20px; font-weight:bold; color:#2B2B2B; border-top:1px solid #bbb; padding-top:10px;" colspan="2">TOTAL PAGADO (RD$)</td>
+          <td style="font-size:20px; font-weight:bold; color:#3B7A57; text-align:right; border-top:1px solid #bbb; padding-top:10px;">${fmtMoney(r.total)}</td></tr>
+    </table>
+    ${BRAND_STRIP_HTML}
+  </div>`;
 }
 
 async function sendNotification(to, subject, html){
@@ -629,6 +686,14 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [calForm, setCalForm] = useState(null);
+  const [families, setFamilies] = useState([]);
+  const [invoicesList, setInvoicesList] = useState([]);
+  const [ninosView, setNinosView] = useState('familias');
+  const [addingFamily, setAddingFamily] = useState(false);
+  const [editingFamilyId, setEditingFamilyId] = useState(null);
+  const [openFamilyId, setOpenFamilyId] = useState(null);
+  const [familyItemForm, setFamilyItemForm] = useState(null); // {id, familyId, ...}
+  const [sendingInvoiceFor, setSendingInvoiceFor] = useState(null);
   const [officeIp, setOfficeIp] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
   const [showAttendance, setShowAttendance] = useState(false);
@@ -671,6 +736,97 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const { data, error } = await supabase.rpc('get_my_ip');
     if(error || !data){ toast('No se pudo detectar la IP.'); return; }
     setOfficeIp(data);
+  }
+
+  const reloadNinos = useCallback(async ()=>{
+    const [f, i] = await Promise.all([
+      supabase.rpc('admin_list_families'),
+      supabase.rpc('admin_list_invoices'),
+    ]);
+    if(f.data) setFamilies(f.data);
+    if(i.data) setInvoicesList(i.data);
+  },[]);
+
+  useEffect(()=>{ if(view==='ninos') reloadNinos(); },[view, reloadNinos]);
+
+  async function saveFamily(e){
+    e.preventDefault();
+    const f = e.target;
+    const tutorName = f.tutorName.value.trim(), emails = f.emails.value.trim();
+    const discount = Number(f.discount.value)||0;
+    const override = f.override.value.trim() ? Number(f.override.value) : null;
+    if(!tutorName || !emails){ toast('Completa el nombre del tutor y el correo.'); return; }
+    const { error } = await supabase.rpc('admin_save_family', {
+      p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails,
+      p_discount_percent: discount, p_total_override: override
+    });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('Familia guardada.');
+    setAddingFamily(false); setEditingFamilyId(null);
+    reloadNinos();
+  }
+
+  async function toggleFamilyActive(id){
+    const { error } = await supabase.rpc('admin_toggle_family_active', { p_family_id:id });
+    if(error){ toast('No se pudo guardar.'); return; }
+    reloadNinos();
+  }
+
+  async function deleteFamily(id){
+    const { error } = await supabase.rpc('admin_delete_family', { p_family_id:id });
+    if(error){ toast('No se pudo eliminar.'); return; }
+    toast('Familia eliminada.');
+    reloadNinos();
+  }
+
+  async function saveFamilyItem(e, familyId){
+    e.preventDefault();
+    const f = e.target;
+    const childName = f.childName.value.trim(), program = f.program.value.trim();
+    const schedule = f.schedule.value.trim(), amount = Number(f.amount.value)||0;
+    if(!childName || !program){ toast('Completa nombre del niño y programa.'); return; }
+    const { error } = await supabase.rpc('admin_save_family_item', {
+      p_item_id: familyItemForm.id, p_family_id: familyId, p_child_name: childName,
+      p_program: program, p_schedule: schedule, p_amount: amount
+    });
+    if(error){ toast('No se pudo guardar.'); return; }
+    setFamilyItemForm(null);
+    reloadNinos();
+  }
+
+  async function deleteFamilyItem(id){
+    const { error } = await supabase.rpc('admin_delete_family_item', { p_item_id:id });
+    if(error){ toast('No se pudo eliminar.'); return; }
+    reloadNinos();
+  }
+
+  async function sendInvoiceNow(familyId){
+    setSendingInvoiceFor(familyId);
+    const { data, error } = await supabase.functions.invoke('send-invoice', {
+      body: { family_id: familyId },
+      headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+    });
+    setSendingInvoiceFor(null);
+    if(error || !data){ toast('No se pudo enviar la factura.'); return; }
+    if(data.sent>0) toast('Factura enviada.');
+    else toast((data.details && data.details[0] && data.details[0].error) || 'No se pudo enviar.');
+    reloadNinos();
+  }
+
+  async function markPaidAndSendReceipt(invoiceId){
+    const { data, error } = await supabase.rpc('admin_mark_invoice_paid', { p_invoice_id: invoiceId });
+    const r = data && data[0];
+    if(error || !r || !r.ok){ toast('No se pudo procesar.'); return; }
+    const html = buildReceiptHtml(r);
+    const toEmails = r.emails; // string, comma separated ok as "to"
+    try{
+      await supabase.functions.invoke('send-mail', {
+        body: { to: toEmails, subject: `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html },
+        headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+      });
+    }catch(e){ console.error(e); }
+    toast('Recibo enviado.');
+    reloadNinos();
   }
 
   async function saveOfficeIp(){
@@ -1207,6 +1363,128 @@ function AdminApp({ user, onLogout, toast, Toast }){
         )}
       </>
     );
+  } else if(view==='ninos'){
+    content = (
+      <>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:0}}>
+          <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
+          <button className="link-btn" onClick={()=>setNinosView(ninosView==='familias'?'facturas':'familias')}>{ninosView==='familias' ? 'Ver facturas' : 'Ver familias'}</button>
+        </div>
+        {ninosView==='facturas' ? (
+          invoicesList.length ? invoicesList.map(inv=>(
+            <div key={inv.id} className={`list-item st-${inv.status==='pagada'?'aprobado':'pendiente'}`}>
+              <div className="li-top">
+                <div>
+                  <p className="li-title">{inv.tutor_name_snapshot} · {inv.invoice_number}</p>
+                  <p className="li-sub" style={{textTransform:'capitalize'}}>{fmtMonth(inv.billing_month)} · {fmtMoney(inv.total)}</p>
+                  {inv.status==='pagada' && <p className="li-sub">Recibo {inv.receipt_number} · Pagado {fmtDate(inv.payment_date)}</p>}
+                </div>
+                <span className={`badge badge-${inv.status==='pagada'?'aprobado':'pendiente'}`}>{inv.status==='pagada'?'Pagada':'Emitida'}</span>
+              </div>
+              {inv.status==='emitida' && (
+                <div className="li-actions">
+                  <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)}>Enviar recibo</button>
+                </div>
+              )}
+            </div>
+          )) : <div className="empty-state">Aún no se ha emitido ninguna factura.</div>
+        ) : (
+          <>
+            <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14, marginTop:14}}>
+              {!addingFamily && !editingFamilyId && <button className="btn btn-warm btn-sm" onClick={()=>setAddingFamily(true)}><Icon name="plus" sw={2}/> Agregar familia</button>}
+            </div>
+            {addingFamily && (
+              <form className="form-card" style={{marginBottom:14}} onSubmit={saveFamily}>
+                <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" placeholder="Ej. Maria Alejandra Segura" required /></div>
+                <div className="field"><label>Correo(s) — separados por coma si son varios</label><input name="emails" placeholder="correo@ejemplo.com" required /></div>
+                <div className="two-col">
+                  <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue="0" /></div>
+                  <div className="field"><label>Monto fijo total (opcional)</label><input name="override" type="number" step="0.01" placeholder="Deja vacío si no aplica" /></div>
+                </div>
+                <p className="hint" style={{marginBottom:12}}>Si pones un "monto fijo total", se factura ese monto exacto en vez de sumar los niños de abajo (útil para paquetes familiares negociados).</p>
+                <div className="li-actions">
+                  <button type="button" className="btn btn-ghost" onClick={()=>setAddingFamily(false)}>Cancelar</button>
+                  <button type="submit" className="btn btn-primary">Guardar familia</button>
+                </div>
+              </form>
+            )}
+            {families.map(fam=>{
+              if(editingFamilyId===fam.id) return (
+                <form key={fam.id} className="form-card" style={{marginBottom:10}} onSubmit={saveFamily}>
+                  <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" defaultValue={fam.tutor_name} required /></div>
+                  <div className="field"><label>Correo(s)</label><input name="emails" defaultValue={fam.emails} required /></div>
+                  <div className="two-col">
+                    <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue={fam.discount_percent||0} /></div>
+                    <div className="field"><label>Monto fijo total</label><input name="override" type="number" step="0.01" defaultValue={fam.total_override||''} /></div>
+                  </div>
+                  <div className="li-actions">
+                    <button type="button" className="btn btn-ghost" onClick={()=>setEditingFamilyId(null)}>Cancelar</button>
+                    <button type="submit" className="btn btn-primary">Guardar</button>
+                  </div>
+                </form>
+              );
+              const subtotal = (fam.items||[]).reduce((s,it)=>s+Number(it.amount||0),0);
+              const total = fam.total_override!=null ? Number(fam.total_override) : subtotal*(1-(Number(fam.discount_percent)||0)/100);
+              const isOpen = openFamilyId===fam.id;
+              return (
+                <div key={fam.id} className={`teacher-row${fam.active?'':' inactive'}`}>
+                  <div className="teacher-row-top" style={{cursor:'pointer'}} onClick={()=>setOpenFamilyId(isOpen?null:fam.id)}>
+                    <div>
+                      <p className="teacher-name">{fam.tutor_name}</p>
+                      <p className="teacher-meta">{(fam.items||[]).length} niño{(fam.items||[]).length===1?'':'s'} · {fmtMoney(total)}/mes {fam.active?'':'· inactiva'}</p>
+                      <p className="teacher-meta">{fam.emails}</p>
+                    </div>
+                    <div className="row-actions">
+                      <button className="mini-btn" onClick={(e)=>{e.stopPropagation(); setEditingFamilyId(fam.id); setAddingFamily(false);}} aria-label="Editar"><Icon name="edit" sw={1.6}/></button>
+                      <button className="mini-btn" onClick={(e)=>{e.stopPropagation(); toggleFamilyActive(fam.id);}} aria-label="Activar o desactivar"><Icon name={fam.active?'x':'check'} sw={1.8}/></button>
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <div style={{marginTop:12, borderTop:'1px solid var(--border)', paddingTop:12}}>
+                      {(fam.items||[]).map(it=>(
+                        <div key={it.id} className="list-item" style={{marginBottom:6}}>
+                          <div className="li-top">
+                            <div>
+                              <p className="li-title">{it.child_name}</p>
+                              <p className="li-sub">{it.program}{it.schedule?` · ${it.schedule}`:''} · {fmtMoney(it.amount)}</p>
+                            </div>
+                            <div className="row-actions">
+                              <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount })}><Icon name="edit" sw={1.6}/></button>
+                              <button className="mini-btn" onClick={()=>deleteFamilyItem(it.id)}><Icon name="trash" sw={1.6}/></button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {familyItemForm && familyItemForm.familyId===fam.id ? (
+                        <form className="form-card" style={{marginTop:8}} onSubmit={(e)=>saveFamilyItem(e,fam.id)}>
+                          <div className="field"><label>Nombre del niño/a</label><input name="childName" defaultValue={familyItemForm.childName||''} required /></div>
+                          <div className="two-col">
+                            <div className="field"><label>Programa</label><input name="program" defaultValue={familyItemForm.program||''} placeholder="Ej. Sensi Steps" required /></div>
+                            <div className="field"><label>Monto</label><input name="amount" type="number" step="0.01" defaultValue={familyItemForm.amount||''} required /></div>
+                          </div>
+                          <div className="field"><label>Día y horario</label><input name="schedule" defaultValue={familyItemForm.schedule||''} placeholder="Ej. Martes y Jueves 3:00-6:00" /></div>
+                          <div className="li-actions">
+                            <button type="button" className="btn btn-ghost" onClick={()=>setFamilyItemForm(null)}>Cancelar</button>
+                            <button type="submit" className="btn btn-primary">Guardar</button>
+                          </div>
+                        </form>
+                      ) : (
+                        <button className="btn btn-outline btn-sm" onClick={()=>setFamilyItemForm({ id:null, familyId:fam.id })}><Icon name="plus" sw={2}/> Agregar niño</button>
+                      )}
+                      <div className="li-actions" style={{marginTop:14}}>
+                        <button className="btn btn-danger-outline btn-sm" onClick={()=>{if(confirm('¿Eliminar esta familia y todos sus niños?')) deleteFamily(fam.id);}}>Eliminar familia</button>
+                        <button className="btn btn-primary btn-sm" disabled={sendingInvoiceFor===fam.id} onClick={()=>sendInvoiceNow(fam.id)}>{sendingInvoiceFor===fam.id?'Enviando…':'Enviar factura ahora'}</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!families.length && <div className="empty-state">Aún no has agregado familias.</div>}
+          </>
+        )}
+      </>
+    );
   } else if(view==='ajustes'){
     content = (
       <>
@@ -1255,6 +1533,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
         <button className={`nav-btn${view==='maestras'?' active':''}`} onClick={()=>setView('maestras')}><Icon name="users"/><span>Maestras</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
         <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="calendar"/><span>Calendario</span></button>
+        <button className={`nav-btn${view==='ninos'?' active':''}`} onClick={()=>setView('ninos')}><Icon name="receipt"/><span>Niños</span></button>
         <button className={`nav-btn${view==='ajustes'?' active':''}`} onClick={()=>setView('ajustes')}><Icon name="settings"/><span>Ajustes</span></button>
       </nav>
       <Toast />
