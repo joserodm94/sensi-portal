@@ -317,13 +317,15 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     const recent = requests.slice(0,3);
     content = (
       <>
-        <div className="hero-card">
-          <p className="hero-label">Días de vacaciones</p>
-          <div className="hero-figure"><span className="hero-number">{disponibles}</span><span className="hero-unit">disponibles de {balance.vacation_days_total||0}</span></div>
-          <div className="hero-bar"><div className="hero-bar-fill" style={{width:`${pct}%`}} /></div>
-          <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
-        </div>
-        <div className="form-card" style={{marginTop:16}}>
+        {vacationEnabled && (
+          <div className="hero-card">
+            <p className="hero-label">Días de vacaciones</p>
+            <div className="hero-figure"><span className="hero-number">{disponibles}</span><span className="hero-unit">disponibles de {balance.vacation_days_total||0}</span></div>
+            <div className="hero-bar"><div className="hero-bar-fill" style={{width:`${pct}%`}} /></div>
+            <p className="hero-note">{balance.vacation_days_used||0} días tomados este período</p>
+          </div>
+        )}
+        <div className="form-card" style={{marginTop: vacationEnabled ? 16 : 0}}>
           <p style={{fontWeight:600, fontSize:14.5, marginBottom:10}}>Asistencia de hoy</p>
           <div className="quick-actions" style={{marginTop:0}}>
             <button className="btn btn-primary" disabled={attBusy || !!entradaHoy} onClick={()=>markAttendance('entrada')}>
