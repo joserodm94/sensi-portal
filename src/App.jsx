@@ -815,15 +815,23 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const f = e.target;
     const childName = f.childName.value.trim(), program = f.program.value.trim();
     const schedule = f.schedule.value.trim(), amount = Number(f.amount.value)||0;
-    const teacherId = f.teacherId.value || null;
+    const teacherIds = familyItemForm.teacherIds || [];
     if(!childName || !program){ toast('Completa nombre del niño y programa.'); return; }
     const { error } = await supabase.rpc('admin_save_family_item', {
       p_item_id: familyItemForm.id, p_family_id: familyId, p_child_name: childName,
-      p_program: program, p_schedule: schedule, p_amount: amount, p_teacher_id: teacherId
+      p_program: program, p_schedule: schedule, p_amount: amount, p_teacher_ids: teacherIds
     });
     if(error){ toast('No se pudo guardar.'); return; }
     setFamilyItemForm(null);
     reloadNinos();
+  }
+
+  function toggleFormTeacher(id){
+    setFamilyItemForm(prev=>{
+      const cur = prev.teacherIds || [];
+      const next = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur, id];
+      return { ...prev, teacherIds: next };
+    });
   }
 
   async function deleteFamilyItem(id){
@@ -1529,10 +1537,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
                             <div>
                               <p className="li-title">{it.child_name}{it.active===false?' · inactivo':''}</p>
                               <p className="li-sub">{it.program}{it.schedule?` · ${it.schedule}`:''} · {fmtMoney(it.amount)}</p>
-                              <p className="li-sub">{it.teacher_name ? `Maestra: ${it.teacher_name}` : 'Sin maestra asignada'}</p>
+                              <p className="li-sub">{(it.teacher_names&&it.teacher_names.length) ? `Maestras: ${it.teacher_names.join(', ')}` : 'Sin maestra asignada'}</p>
                             </div>
                             <div className="row-actions">
-                              <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount, teacherId:it.teacher_id })}><Icon name="edit" sw={1.6}/></button>
+                              <button className="mini-btn" onClick={()=>setFamilyItemForm({ id:it.id, familyId:fam.id, childName:it.child_name, program:it.program, schedule:it.schedule, amount:it.amount, teacherIds:it.teacher_ids||[] })}><Icon name="edit" sw={1.6}/></button>
                               <button className="mini-btn" onClick={()=>toggleFamilyItemActive(it.id)} aria-label="Activar o desactivar">{it.active===false?<Icon name="check" sw={1.8}/>:<Icon name="x" sw={1.8}/>}</button>
                               <button className="mini-btn" onClick={()=>deleteFamilyItem(it.id)}><Icon name="trash" sw={1.6}/></button>
                             </div>
@@ -1547,11 +1555,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
                             <div className="field"><label>Monto</label><input name="amount" type="number" step="0.01" defaultValue={familyItemForm.amount||''} required /></div>
                           </div>
                           <div className="field"><label>Día y horario</label><input name="schedule" defaultValue={familyItemForm.schedule||''} placeholder="Ej. Martes y Jueves 3:00-6:00" /></div>
-                          <div className="field"><label>Maestra asignada</label>
-                            <select name="teacherId" defaultValue={familyItemForm.teacherId||''}>
-                              <option value="">Sin asignar</option>
-                              {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-                            </select>
+                          <div className="field"><label>Maestra(s) asignada(s) — puedes elegir varias</label>
+                            <div className="chip-row" style={{marginBottom:0}}>
+                              {teachers.map(t=>(
+                                <button key={t.id} type="button" className={`chip${(familyItemForm.teacherIds||[]).includes(t.id)?' active':''}`} onClick={()=>toggleFormTeacher(t.id)}>{t.name}</button>
+                              ))}
+                            </div>
                           </div>
                           <div className="li-actions">
                             <button type="button" className="btn btn-ghost" onClick={()=>setFamilyItemForm(null)}>Cancelar</button>
