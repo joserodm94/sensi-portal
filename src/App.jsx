@@ -123,13 +123,15 @@ function buildReceiptHtml(r){
 }
 
 async function sendNotification(to, subject, html){
-  if(!to) return;
+  if(!to) return false;
   try{
-    await supabase.functions.invoke('send-mail', {
+    const { error } = await supabase.functions.invoke('send-mail', {
       body: { to, subject, html },
       headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
     });
-  }catch(e){ console.error('email error', e); }
+    if(error){ console.error('email error', error); return false; }
+    return true;
+  }catch(e){ console.error('email error', e); return false; }
 }
 
 // Deducciones de nómina, República Dominicana (vigentes 2026)
@@ -853,25 +855,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const r = data && data[0];
     if(error || !r || !r.ok){ toast('No se pudo procesar.'); return; }
     const html = buildReceiptHtml(r);
-    const toEmails = r.emails; // string, comma separated ok as "to"
-    try{
-      await supabase.functions.invoke('send-mail', {
-        body: { to: toEmails, subject: `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html },
-        headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
-      });
-    }catch(e){ console.error(e); }
-    toast('Recibo enviado.');
+    const ok = await sendNotification(r.emails, `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html);
+    toast(ok ? 'Recibo enviado.' : 'Se marcó como pagada, pero el correo del recibo no se pudo enviar. Revisa el correo de la familia.');
     reloadNinos();
   }
 
   async function sendReminder(inv){
     const html = buildReminderHtml(inv);
-    try{
-      await supabase.functions.invoke('send-mail', {
-        body: { to: inv.emails_snapshot, subject: `Recordatorio de pago — Factura ${inv.invoice_number}`, html },
-        headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
-      });
-    }catch(e){ console.error(e); toast('No se pudo enviar el recordatorio.'); return; }
+    const ok = await sendNotification(inv.emails_snapshot, `Recordatorio de pago — Factura ${inv.invoice_number}`, html);
+    if(!ok){ toast('No se pudo enviar el recordatorio. Revisa el correo de la familia.'); return; }
     const { error } = await supabase.rpc('admin_mark_reminder_sent', { p_invoice_id: inv.id });
     if(error){ toast('Se envió, pero no se pudo guardar la fecha.'); reloadNinos(); return; }
     toast('Recordatorio enviado.');
