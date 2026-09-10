@@ -346,6 +346,18 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     supabase.rpc('get_teacher_assigned_children', { p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
   },[view, user.id]);
 
+  async function changeOwnPin(e){
+    e.preventDefault();
+    const f = e.target;
+    const p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
+    if(!/^\d{4}$/.test(p1)){ toast('El PIN debe ser de 4 dígitos.'); return; }
+    if(p1!==p2){ toast('Los PIN no coinciden.'); return; }
+    const { error } = await supabase.rpc('teacher_change_own_pin', { p_teacher_id:user.id, p_new_pin:p1 });
+    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    toast('PIN actualizado.');
+    f.reset();
+  }
+
   async function markAttendance(type){
     setAttBusy(true);
     const { data, error } = await supabase.rpc('log_attendance', { p_teacher_id:user.id, p_type:type });
@@ -533,6 +545,12 @@ function TeacherApp({ user, onLogout, toast, Toast }){
             {c.horario && <p className="li-sub">{c.horario}</p>}
           </div>
         )) : <div className="empty-state">No tienes niños asignados en el calendario todavía.</div>}
+        <p className="section-title">Cambiar mi PIN</p>
+        <form className="form-card" onSubmit={changeOwnPin}>
+          <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
+          <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
+          <button className="btn btn-primary" type="submit">Actualizar PIN</button>
+        </form>
       </>
     );
   }
