@@ -1116,6 +1116,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
           </div>
           <div className="export-row">
             <button className="link-btn" onClick={()=>setShowSummary(true)}>Ver resumen mensual</button>
+            <button className="link-btn" onClick={()=>{setView('ninos'); setNinosView('facturas');}}>Ver facturas</button>
           </div>
           {list.length ? list.map(r=><RequestItem key={r.id} r={r} showActions onReview={reviewRequest} teacherName={r.teacher_name} />) : <div className="empty-state">No hay solicitudes en esta vista.</div>}
         </>
