@@ -717,6 +717,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [families, setFamilies] = useState([]);
   const [invoicesList, setInvoicesList] = useState([]);
   const [ninosView, setNinosView] = useState('familias');
+  const [invoiceSummaryMonth, setInvoiceSummaryMonth] = useState(new Date().toISOString().slice(0,7));
   const [addingFamily, setAddingFamily] = useState(false);
   const [editingFamilyId, setEditingFamilyId] = useState(null);
   const [openFamilyId, setOpenFamilyId] = useState(null);
@@ -1419,6 +1420,32 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
           <button className="link-btn" onClick={()=>setNinosView(ninosView==='familias'?'facturas':'familias')}>{ninosView==='familias' ? 'Ver facturas' : 'Ver familias'}</button>
         </div>
+        {ninosView==='facturas' ? (
+          <>
+            {(()=>{
+              const inMonth = invoicesList.filter(inv=>inv.issue_date && inv.issue_date.slice(0,7)===invoiceSummaryMonth);
+              const facturado = inMonth.reduce((s,i)=>s+Number(i.total),0);
+              const cobrado = inMonth.filter(i=>i.status==='pagada').reduce((s,i)=>s+Number(i.total),0);
+              const pendiente = facturado - cobrado;
+              return (
+                <div className="form-card" style={{marginBottom:16}}>
+                  <div className="field" style={{marginBottom:12}}><label>Mes</label><input type="month" value={invoiceSummaryMonth} onChange={e=>setInvoiceSummaryMonth(e.target.value)} /></div>
+                  <div className="nomina-line"><span>Facturado</span><span>{fmtMoney(facturado)}</span></div>
+                  <div className="nomina-line"><span>Cobrado</span><span>{fmtMoney(cobrado)}</span></div>
+                  <div className="nomina-line total"><span>Pendiente</span><span>{fmtMoney(pendiente)}</span></div>
+                  <p className="hint" style={{marginTop:8}}>{inMonth.length} factura{inMonth.length===1?'':'s'} emitida{inMonth.length===1?'':'s'} este mes ({inMonth.filter(i=>i.status==='pagada').length} pagada{inMonth.filter(i=>i.status==='pagada').length===1?'':'s'})</p>
+                </div>
+              );
+            })()}
+            <div className="export-row">
+              <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('facturas_sensi.csv',
+                ['Familia','N° factura','Mes facturado','Emisión','Vencimiento','Subtotal','Descuento','Total','Estado','N° recibo','Fecha de pago'],
+                invoicesList.map(i=>[i.tutor_name_snapshot, i.invoice_number, fmtMonth(i.billing_month), fmtDate(i.issue_date), fmtDate(i.due_date), i.subtotal, i.discount_amount, i.total, i.status, i.receipt_number||'', i.payment_date?fmtDate(i.payment_date):''])
+              )}>Exportar CSV</button>
+              <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
+            </div>
+          </>
+        ) : null}
         {ninosView==='facturas' ? (
           invoicesList.length ? invoicesList.map(inv=>{
             const isOverdue = inv.status==='emitida' && inv.due_date < todayStr();
