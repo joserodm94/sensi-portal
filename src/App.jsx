@@ -50,8 +50,9 @@ async function sendNotification(to, subject, html){
 // Deducciones de nómina, República Dominicana (vigentes 2026)
 const AFP_RATE = 0.0287;
 const SFS_RATE = 0.0304;
-function calcularDeduccionesRD(brutoMensual){
+function calcularDeduccionesRD(brutoMensual, otrasDeducciones){
   const bruto = Number(brutoMensual) || 0;
+  const otras = Number(otrasDeducciones) || 0;
   const afp = bruto * AFP_RATE;
   const sfs = bruto * SFS_RATE;
   const gravableMensual = bruto - afp - sfs;
@@ -62,9 +63,9 @@ function calcularDeduccionesRD(brutoMensual){
   else if (anual <= 867123) isrAnual = 31216 + (anual - 624329) * 0.20;
   else isrAnual = 79776 + (anual - 867123) * 0.25;
   const isr = isrAnual / 12;
-  const deducciones = afp + sfs + isr;
+  const deducciones = afp + sfs + isr + otras;
   const neto = bruto - deducciones;
-  return { afp, sfs, isr, deducciones, neto };
+  return { afp, sfs, isr, otras, deducciones, neto };
 }
 
 const ICONS = {
@@ -193,6 +194,45 @@ function Login({ onLogin, toast, Toast }){
         )}
       </div>
       <Toast />
+    </div>
+  );
+}
+
+function weekDatesFor(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  const day = d.getDay(); // 0=Dom .. 6=Sáb
+  const mondayOffset = day===0 ? -6 : 1-day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate()+mondayOffset);
+  const days = [];
+  for(let i=0;i<7;i++){
+    const dt = new Date(monday);
+    dt.setDate(monday.getDate()+i);
+    days.push(`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`);
+  }
+  return days;
+}
+const WEEKDAY_LETTERS = ['L','M','M','J','V','S','D'];
+
+function WeekDayPicker({ value, onChange }){
+  const week = weekDatesFor(value);
+  const today = todayStr();
+  return (
+    <div className="week-strip">
+      {week.map((d,i)=>{
+        const dayNum = Number(d.slice(8,10));
+        const isSel = d===value;
+        return (
+          <button key={d} type="button" className={`week-pill${isSel?' active':''}${d===today?' today':''}`} onClick={()=>onChange(d)}>
+            <span className="week-pill-letter">{WEEKDAY_LETTERS[i]}</span>
+            <span className="week-pill-num">{dayNum}</span>
+          </button>
+        );
+      })}
+      <div className="date-icon-wrap">
+        <input type="date" className="date-icon-input" value={value} onChange={e=>onChange(e.target.value)} />
+        <span className="date-icon-visual"><Icon name="calendar" sw={1.6} /></span>
+      </div>
     </div>
   );
 }
@@ -388,7 +428,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       <>
         <p className="section-title">Nómina mensual</p>
         <div className="export-row">
-          <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`nomina_${user.name}.csv`, ['Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+          <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV(`nomina_${user.name}.csv`, ['Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
           <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
         </div>
         {payroll.map(p=>(
@@ -403,7 +443,16 @@ function TeacherApp({ user, onLogout, toast, Toast }){
             {openNomina===p.id && (
               <div className="nomina-detail">
                 <div className="nomina-line"><span>Salario bruto</span><span>{fmtMoney(p.bruto)}</span></div>
-                <div className="nomina-line"><span>Deducciones</span><span>-{fmtMoney(p.deducciones)}</span></div>
+                {(p.afp||p.sfs||p.isr||p.other_deductions) ? (
+                  <>
+                    <div className="nomina-line"><span>AFP</span><span>-{fmtMoney(p.afp)}</span></div>
+                    <div className="nomina-line"><span>SFS</span><span>-{fmtMoney(p.sfs)}</span></div>
+                    <div className="nomina-line"><span>ISR</span><span>-{fmtMoney(p.isr)}</span></div>
+                    {p.other_deductions>0 && <div className="nomina-line"><span>Otras deducciones</span><span>-{fmtMoney(p.other_deductions)}</span></div>}
+                  </>
+                ) : (
+                  <div className="nomina-line"><span>Deducciones</span><span>-{fmtMoney(p.deducciones)}</span></div>
+                )}
                 <div className="nomina-line total"><span>Neto pagado</span><span>{fmtMoney(p.neto)}</span></div>
                 {p.nota && <p className="li-reason" style={{marginTop:10}}>{p.nota}</p>}
               </div>
@@ -416,9 +465,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     content = (
       <>
         <p className="section-title">Calendario del día</p>
-        <div className="day-picker">
-          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-        </div>
+        <WeekDayPicker value={calDate} onChange={setCalDate} />
         {calEntries.length ? calEntries.map(c=>(
           <div key={c.id} className="cal-entry">
             <p className="li-title">{c.teacher_name}</p>
@@ -443,6 +490,41 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       </nav>
       <Toast />
     </div>
+  );
+}
+
+function PayrollFormFields({ f, teachers, onSubmit, onCancel }){
+  const [bruto, setBruto] = useState(f.bruto || '');
+  const [otras, setOtras] = useState(f.otras || '');
+  const calc = calcularDeduccionesRD(Number(bruto)||0, Number(otras)||0);
+  return (
+    <form className="form-card" style={{marginBottom:16}} onSubmit={onSubmit}>
+      <div className="field"><label>Maestra</label>
+        <select name="teacherId" defaultValue={f.teacherId}>
+          {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </div>
+      <div className="field"><label>Mes</label><input name="month" type="month" defaultValue={f.month} required /></div>
+      <div className="two-col">
+        <div className="field"><label>Salario bruto</label><input name="bruto" type="number" step="0.01" value={bruto} onChange={e=>setBruto(e.target.value)} required /></div>
+        <div className="field"><label>Otras deducciones (opcional)</label><input name="otras" type="number" step="0.01" value={otras} onChange={e=>setOtras(e.target.value)} placeholder="0" /></div>
+      </div>
+      {Number(bruto)>0 && (
+        <div className="form-card" style={{background:'var(--bg)', marginBottom:16}}>
+          <div className="nomina-line"><span>AFP (2.87%)</span><span>{fmtMoney(calc.afp)}</span></div>
+          <div className="nomina-line"><span>SFS (3.04%)</span><span>{fmtMoney(calc.sfs)}</span></div>
+          <div className="nomina-line"><span>ISR (DGII)</span><span>{fmtMoney(calc.isr)}</span></div>
+          {Number(otras)>0 && <div className="nomina-line"><span>Otras deducciones</span><span>{fmtMoney(calc.otras)}</span></div>}
+          <div className="nomina-line total"><span>Neto</span><span>{fmtMoney(calc.neto)}</span></div>
+        </div>
+      )}
+      <div className="field"><label>Fecha de pago</label><input name="fechaPago" type="date" defaultValue={f.fechaPago} /></div>
+      <div className="field"><label>Nota (opcional)</label><textarea name="nota" defaultValue={f.nota} /></div>
+      <div className="li-actions">
+        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancelar</button>
+        <button type="submit" className="btn btn-primary">Guardar</button>
+      </div>
+    </form>
   );
 }
 
@@ -655,20 +737,21 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const teacherId = f.teacherId.value, month = f.month.value;
-    const bruto = Number(f.bruto.value)||0, deducciones = Number(f.deducciones.value)||0;
-    const neto = Number(f.neto.value)|| (bruto-deducciones);
+    const bruto = Number(f.bruto.value)||0, otras = Number(f.otras.value)||0;
+    const calc = calcularDeduccionesRD(bruto, otras);
     const fechaPago = f.fechaPago.value, nota = f.nota.value.trim();
     if(!teacherId||!month){ toast('Selecciona maestra y mes.'); return; }
     const { error } = await supabase.rpc('admin_save_payroll', {
       p_payroll_id: payrollForm.id || null, p_teacher_id:teacherId, p_month:month,
-      p_bruto:bruto, p_deducciones:deducciones, p_neto:neto, p_fecha_pago:fechaPago||null, p_nota:nota
+      p_bruto:bruto, p_afp:calc.afp, p_sfs:calc.sfs, p_isr:calc.isr, p_other_deductions:otras,
+      p_neto:calc.neto, p_fecha_pago:fechaPago||null, p_nota:nota
     });
     if(error){ toast(error.message.includes('duplicate') ? 'Ya existe una nómina para esa maestra en ese mes.' : 'No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Nómina guardada.');
     setPayrollForm(null);
     const teacher = teachers.find(t=>t.id===teacherId);
     sendNotification(teacher?.email, `Tu nómina de ${fmtMonth(month)} ya está disponible`,
-      `<p>Hola ${teacher?.name||''},</p><p>Tu nómina de <strong>${fmtMonth(month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(neto)}</strong>.</p><p>— Sensi Portal</p>`);
+      `<p>Hola ${teacher?.name||''},</p><p>Tu nómina de <strong>${fmtMonth(month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     reload();
   }
 
@@ -678,11 +761,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
       const parts = line.split(',');
       const rawName = (parts[0]||'').trim();
       const bruto = Number((parts[1]||'').replace(/[^\d.]/g,'')) || 0;
+      const otras = Number((parts[2]||'').replace(/[^\d.]/g,'')) || 0;
       const nameLower = rawName.toLowerCase();
       let teacher = teachers.find(t=>t.name.toLowerCase()===nameLower);
       if(!teacher) teacher = teachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
-      const calc = bruto ? calcularDeduccionesRD(bruto) : null;
-      return { rawName, bruto, teacher, calc };
+      const calc = bruto ? calcularDeduccionesRD(bruto, otras) : null;
+      return { rawName, bruto, otras, teacher, calc };
     });
     setBulkPreview(rows);
   }
@@ -693,11 +777,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
     let ok=0, fail=0;
     for(const row of bulkPreview){
       if(!row.teacher || !row.bruto){ fail++; continue; }
-      const nota = `AFP: ${fmtMoney(row.calc.afp)} (2.87%) · SFS: ${fmtMoney(row.calc.sfs)} (3.04%) · ISR: ${fmtMoney(row.calc.isr)}`;
+      const nota = row.otras ? `Otras deducciones: ${fmtMoney(row.otras)}` : '';
       const { error } = await supabase.rpc('admin_save_payroll', {
         p_payroll_id: null, p_teacher_id: row.teacher.id, p_month: bulkMonth,
-        p_bruto: row.bruto, p_deducciones: row.calc.deducciones, p_neto: row.calc.neto,
-        p_fecha_pago: bulkFecha || null, p_nota: nota
+        p_bruto: row.bruto, p_afp: row.calc.afp, p_sfs: row.calc.sfs, p_isr: row.calc.isr,
+        p_other_deductions: row.otras, p_neto: row.calc.neto, p_fecha_pago: bulkFecha || null, p_nota: nota
       });
       if(error){ fail++; continue; }
       ok++;
@@ -864,26 +948,26 @@ function AdminApp({ user, onLogout, toast, Toast }){
           {!f && !bulkOpen && (
             <div style={{display:'flex',gap:8}}>
               <button className="btn btn-outline btn-sm" onClick={()=>{setBulkOpen(true); setBulkPreview(null);}}>Carga masiva</button>
-              <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', deducciones:'', neto:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
+              <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', otras:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
             </div>
           )}
         </div>
         {!f && !bulkOpen && payroll.length>0 && (
           <div className="export-row">
-            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','Deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.deducciones, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
+            <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
             <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
           </div>
         )}
         {bulkOpen && (
           <div className="form-card" style={{marginBottom:16}}>
-            <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto</strong>. Ejemplo: <em>Rossella, 25000</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
+            <p className="hint" style={{marginBottom:10}}>Pega una línea por maestra: <strong>Nombre, sueldo bruto, otras deducciones (opcional)</strong>. Ejemplo: <em>Rossella, 25000, 500</em>. AFP (2.87%), SFS (3.04%) e ISR (tabla DGII 2026) se calculan solos.</p>
             <div className="two-col">
               <div className="field"><label>Mes</label><input type="month" value={bulkMonth} onChange={e=>setBulkMonth(e.target.value)} /></div>
               <div className="field"><label>Fecha de pago</label><input type="date" value={bulkFecha} onChange={e=>setBulkFecha(e.target.value)} /></div>
             </div>
             <div className="field">
               <label>Lista (una maestra por línea)</label>
-              <textarea rows={5} value={bulkText} onChange={e=>{setBulkText(e.target.value); setBulkPreview(null);}} placeholder={'Rossella, 25000\nAna Pérez, 30000'} />
+              <textarea rows={5} value={bulkText} onChange={e=>{setBulkText(e.target.value); setBulkPreview(null);}} placeholder={'Rossella, 25000, 500\nAna Pérez, 30000'} />
             </div>
             {!bulkPreview ? (
               <div className="li-actions">
@@ -898,7 +982,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                     <div className="li-top">
                       <div>
                         <p className="li-title">{row.rawName || '(sin nombre)'}{row.teacher ? ` → ${row.teacher.name}` : ' — no encontrada'}</p>
-                        {row.calc && <p className="li-sub">Bruto {fmtMoney(row.bruto)} · Neto {fmtMoney(row.calc.neto)}</p>}
+                        {row.calc && <p className="li-sub">Bruto {fmtMoney(row.bruto)}{row.otras>0?` · Otras ${fmtMoney(row.otras)}`:''} · Neto {fmtMoney(row.calc.neto)}</p>}
                       </div>
                     </div>
                     {row.calc && <p className="li-reason">AFP {fmtMoney(row.calc.afp)} · SFS {fmtMoney(row.calc.sfs)} · ISR {fmtMoney(row.calc.isr)}</p>}
@@ -914,31 +998,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
           </div>
         )}
         {f && (
-          <form className="form-card" style={{marginBottom:16}} onSubmit={savePayrollForm} onChange={(e)=>{
-            if(e.target.name==='bruto' || e.target.name==='deducciones'){
-              const form = e.target.form;
-              const bruto = Number(form.bruto.value)||0, ded = Number(form.deducciones.value)||0;
-              form.neto.value = (bruto-ded).toFixed(2);
-            }
-          }}>
-            <div className="field"><label>Maestra</label>
-              <select name="teacherId" defaultValue={f.teacherId}>
-                {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Mes</label><input name="month" type="month" defaultValue={f.month} required /></div>
-            <div className="two-col">
-              <div className="field"><label>Salario bruto</label><input name="bruto" type="number" step="0.01" defaultValue={f.bruto} required /></div>
-              <div className="field"><label>Deducciones</label><input name="deducciones" type="number" step="0.01" defaultValue={f.deducciones} /></div>
-            </div>
-            <div className="field"><label>Salario neto</label><input name="neto" type="number" step="0.01" defaultValue={f.neto} /></div>
-            <div className="field"><label>Fecha de pago</label><input name="fechaPago" type="date" defaultValue={f.fechaPago} /></div>
-            <div className="field"><label>Nota (opcional)</label><textarea name="nota" defaultValue={f.nota} /></div>
-            <div className="li-actions">
-              <button type="button" className="btn btn-ghost" onClick={()=>setPayrollForm(null)}>Cancelar</button>
-              <button type="submit" className="btn btn-primary">Guardar</button>
-            </div>
-          </form>
+          <PayrollFormFields f={f} teachers={teachers} onSubmit={savePayrollForm} onCancel={()=>setPayrollForm(null)} />
         )}
         {payroll.length ? payroll.map(p=>(
           <div key={p.id} className="list-item">
@@ -948,7 +1008,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <p className="li-sub" style={{textTransform:'capitalize'}}>{fmtMonth(p.month)} · Neto {fmtMoney(p.neto)}</p>
               </div>
               <div className="row-actions">
-                <button className="mini-btn" onClick={()=>setPayrollForm({ id:p.id, teacherId:p.teacher_id, month:p.month, bruto:p.bruto, deducciones:p.deducciones, neto:p.neto, fechaPago:p.fecha_pago, nota:p.nota||'' })}><Icon name="edit" sw={1.6}/></button>
+                <button className="mini-btn" onClick={()=>setPayrollForm({ id:p.id, teacherId:p.teacher_id, month:p.month, bruto:p.bruto, otras:p.other_deductions||0, fechaPago:p.fecha_pago, nota:p.nota||'' })}><Icon name="edit" sw={1.6}/></button>
                 <button className="mini-btn" onClick={()=>deletePayroll(p.id)}><Icon name="trash" sw={1.6}/></button>
               </div>
             </div>
@@ -963,15 +1023,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <p className="section-title" style={{margin:0}}>{showAttendance ? 'Asistencia del día' : 'Calendario'}</p>
           <button className="link-btn" onClick={()=>setShowAttendance(!showAttendance)}>{showAttendance ? 'Ver horarios' : 'Ver asistencia'}</button>
         </div>
-        <div className="day-picker">
-          <input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} />
-          {!showAttendance && !calForm && !calBulkOpen && (
-            <div style={{display:'flex',gap:8}}>
-              <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
-              <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
-            </div>
-          )}
-        </div>
+        <WeekDayPicker value={calDate} onChange={setCalDate} />
+        {!showAttendance && !calForm && !calBulkOpen && (
+          <div style={{display:'flex',gap:8, marginBottom:16, marginTop:-8}}>
+            <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
+            <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
+          </div>
+        )}
         {showAttendance ? (
           attendanceDay.length ? attendanceDay.map((a,i)=>(
             <div key={i} className="summary-row">
