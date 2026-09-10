@@ -47,6 +47,34 @@ const BRAND_STRIP_HTML = `
     <td style="background:#4A93C9; height:6px; width:20%;"></td>
   </tr></table>`;
 
+function buildReminderHtml(inv){
+  const items = inv.items_snapshot || [];
+  const rows = items.map(it=>`
+    <tr>
+      <td style="padding:8px 6px; border-bottom:1px solid #eee; font-size:13px;">${it.child_name} - ${it.program}</td>
+      <td style="padding:8px 6px; border-bottom:1px solid #eee; font-size:13px; text-align:right;">${fmtNum(it.amount)}</td>
+    </tr>`).join('');
+  return `
+  <div style="border:1px solid #999; padding:20px; font-family:Georgia,serif; max-width:600px;">
+    <div style="font-weight:bold; color:#2B2B2B; font-size:16px;">Sensi SRL</div>
+    <div style="font-size:20px; color:#B23A48; margin-top:8px;">Recordatorio de pago</div>
+    <p style="font-size:14px; color:#2B2B2B; margin-top:14px;">Hola ${inv.tutor_name_snapshot},</p>
+    <p style="font-size:14px; color:#2B2B2B;">Te recordamos que la factura <strong>${inv.invoice_number}</strong> (${fmtMonth(inv.billing_month)}) con vencimiento el <strong>${fmtDate(inv.due_date)}</strong> sigue pendiente de pago.</p>
+    <table width="100%" style="border-collapse:collapse; margin-top:14px;">
+      <tr style="background:#DCE3EA;">
+        <td style="padding:6px; font-size:11px; font-weight:bold; color:#2B2B2B;">DESCRIPCIÓN</td>
+        <td style="padding:6px; font-size:11px; font-weight:bold; color:#2B2B2B; text-align:right;">IMPORTE (RD$)</td>
+      </tr>
+      ${rows}
+    </table>
+    <p style="font-size:20px; font-weight:bold; color:#B23A48; margin-top:14px;">Total pendiente: RD$ ${fmtNum(inv.total)}</p>
+    <div style="margin-top:12px; font-size:13px; color:#2B2B2B;">
+      <b>Métodos de pago:</b> Transferencia bancaria — Banco BHD, cuenta de ahorros 12804400012, cédula 402-2267095-8
+    </div>
+    ${BRAND_STRIP_HTML}
+  </div>`;
+}
+
 function buildReceiptHtml(r){
   const items = r.items_snapshot || [];
   const rows = items.map(it=>`
@@ -835,6 +863,20 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reloadNinos();
   }
 
+  async function sendReminder(inv){
+    const html = buildReminderHtml(inv);
+    try{
+      await supabase.functions.invoke('send-mail', {
+        body: { to: inv.emails_snapshot, subject: `Recordatorio de pago — Factura ${inv.invoice_number}`, html },
+        headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+      });
+    }catch(e){ console.error(e); toast('No se pudo enviar el recordatorio.'); return; }
+    const { error } = await supabase.rpc('admin_mark_reminder_sent', { p_invoice_id: inv.id });
+    if(error){ toast('Se envió, pero no se pudo guardar la fecha.'); reloadNinos(); return; }
+    toast('Recordatorio enviado.');
+    reloadNinos();
+  }
+
   async function saveOfficeIp(){
     const { error } = await supabase.rpc('admin_set_office_ip', { p_ip: officeIp.trim() });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
@@ -1378,23 +1420,28 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <button className="link-btn" onClick={()=>setNinosView(ninosView==='familias'?'facturas':'familias')}>{ninosView==='familias' ? 'Ver facturas' : 'Ver familias'}</button>
         </div>
         {ninosView==='facturas' ? (
-          invoicesList.length ? invoicesList.map(inv=>(
-            <div key={inv.id} className={`list-item st-${inv.status==='pagada'?'aprobado':'pendiente'}`}>
+          invoicesList.length ? invoicesList.map(inv=>{
+            const isOverdue = inv.status==='emitida' && inv.due_date < todayStr();
+            return (
+            <div key={inv.id} className={`list-item st-${inv.status==='pagada'?'aprobado':isOverdue?'rechazado':'pendiente'}`}>
               <div className="li-top">
                 <div>
                   <p className="li-title">{inv.tutor_name_snapshot} · {inv.invoice_number}</p>
                   <p className="li-sub" style={{textTransform:'capitalize'}}>{fmtMonth(inv.billing_month)} · {fmtMoney(inv.total)}</p>
                   {inv.status==='pagada' && <p className="li-sub">Recibo {inv.receipt_number} · Pagado {fmtDate(inv.payment_date)}</p>}
+                  {inv.status==='emitida' && <p className="li-sub">Vence {fmtDate(inv.due_date)}</p>}
+                  {inv.reminder_sent_at && <p className="li-sub">Último recordatorio: {fmtDate(inv.reminder_sent_at.slice(0,10))}</p>}
                 </div>
-                <span className={`badge badge-${inv.status==='pagada'?'aprobado':'pendiente'}`}>{inv.status==='pagada'?'Pagada':'Emitida'}</span>
+                <span className={`badge badge-${inv.status==='pagada'?'aprobado':isOverdue?'rechazado':'pendiente'}`}>{inv.status==='pagada'?'Pagada':isOverdue?'Vencida':'Emitida'}</span>
               </div>
               {inv.status==='emitida' && (
                 <div className="li-actions">
+                  <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
                   <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)}>Enviar recibo</button>
                 </div>
               )}
             </div>
-          )) : <div className="empty-state">Aún no se ha emitido ninguna factura.</div>
+          );}) : <div className="empty-state">Aún no se ha emitido ninguna factura.</div>
         ) : (
           <>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14, marginTop:14}}>
