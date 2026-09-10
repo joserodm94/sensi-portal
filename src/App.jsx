@@ -7,7 +7,10 @@ const DEFAULT_VACATION_DAYS = 14;
 function fmtDate(iso){ if(!iso) return ''; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('es-DO',{day:'2-digit',month:'2-digit',year:'numeric'}); }
 function fmtMonth(ym){ if(!ym) return ''; const [y,m]=ym.split('-').map(Number); return `${MONTHS_ES[m-1]} ${y}`; }
 function fmtMoney(n){ const num=Number(n)||0; return 'RD$ ' + num.toLocaleString('es-DO',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+function todayStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
 function downloadCSV(filename, headers, rows){
   const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
