@@ -136,6 +136,32 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .banner-error{background:var(--danger-soft);border:1px solid var(--danger);color:var(--danger);border-radius:var(--radius-md);padding:12px 14px;margin-bottom:16px;font-size:13px;}
 .link-btn{background:none;border:none;color:inherit;font-weight:600;font-size:13.5px;padding:4px 0;text-decoration:underline;}
 
+/* ---------- Pantalla ancha (computadora): usar el espacio completo ---------- */
+@media (min-width: 860px){
+  body{ display:flex; justify-content:center; }
+  .app-shell{
+    max-width:100%;
+    width:100%;
+  }
+  .app-shell:not(.login-screen) .app-header,
+  .app-shell:not(.login-screen) .content,
+  .bottom-nav{
+    max-width:760px;
+    margin-left:auto;
+    margin-right:auto;
+  }
+  .bottom-nav{ left:0; right:0; }
+  .login-screen{
+    max-width:460px;
+    margin:48px auto;
+    min-height:auto;
+    border-radius:28px;
+    overflow:hidden;
+    box-shadow:0 20px 60px rgba(30,42,34,0.12);
+  }
+  .login-hero{ padding-top:40px; }
+}
+
 .export-row{display:flex;gap:8px;margin-bottom:14px;}
 .export-row .btn{width:auto;}
 .day-picker{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
