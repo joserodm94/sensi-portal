@@ -37,7 +37,7 @@ function tiempoEnEmpresa(hireDateStr){
 async function sendNotification(to, subject, html){
   if(!to) return;
   try{
-    await supabase.functions.invoke('send-email', {
+    await supabase.functions.invoke('send-mail', {
       body: { to, subject, html },
       headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
     });
