@@ -13,6 +13,39 @@ function todayStr(){
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+// Saca el rango de hora de un texto de horario libre (ej. "Martes y Jueves 3:00-6:00")
+// y lo agrupa de forma legible, asumiendo que horas de 1 a 7 son de la tarde.
+function parseTimeRange(text){
+  if(!text) return null;
+  const m = text.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+  if(!m) return null;
+  const label = (h,min)=>{
+    let eff = Number(h);
+    if(eff < 8) eff += 12;
+    const period = eff >= 12 ? 'PM' : 'AM';
+    let disp = eff % 12; if(disp === 0) disp = 12;
+    return `${disp}:${min}${period}`;
+  };
+  const startLabel = label(m[1], m[2]);
+  const endLabel = label(m[3], m[4]);
+  let sortEff = Number(m[1]); if(sortEff < 8) sortEff += 12;
+  return { key: `${startLabel} - ${endLabel}`, sortKey: sortEff + Number(m[2])/60 };
+}
+
+function groupByTime(entries){
+  const groups = {};
+  const sinHorario = [];
+  entries.forEach(e=>{
+    const r = parseTimeRange(e.horario);
+    if(!r){ sinHorario.push(e); return; }
+    if(!groups[r.key]) groups[r.key] = { sortKey:r.sortKey, items:[] };
+    groups[r.key].items.push(e);
+  });
+  const sorted = Object.entries(groups).sort((a,b)=>a[1].sortKey-b[1].sortKey).map(([key,v])=>({ key, items:v.items }));
+  if(sinHorario.length) sorted.push({ key:'Sin horario definido', items:sinHorario });
+  return sorted;
+}
+
 function downloadCSV(filename, headers, rows){
   const esc = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
   const csv = [headers.map(esc).join(','), ...rows.map(r=>r.map(esc).join(','))].join('\r\n');
@@ -596,17 +629,23 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       </>
     );
   } else if(view==='calendario'){
+    const myEntries = calEntries.filter(c=>c.teacher_id===user.id);
+    const groups = groupByTime(myEntries);
     content = (
       <>
         <p className="section-title">Calendario del día</p>
         <WeekDayPicker value={calDate} onChange={setCalDate} />
-        {calEntries.length ? calEntries.map(c=>(
-          <div key={c.id} className="cal-entry">
-            <p className="li-title">{c.teacher_name}</p>
-            <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}</p>
-            {c.notes && <p className="li-reason">{c.notes}</p>}
+        {groups.length ? groups.map(g=>(
+          <div key={g.key} style={{marginBottom:18}}>
+            <p style={{fontWeight:600, fontSize:13.5, color:'var(--accent-dark)', marginBottom:8}}>{g.key}</p>
+            {g.items.map(c=>(
+              <div key={c.id} className="cal-entry">
+                <p className="li-title">{c.child_name}</p>
+                {c.notes && <p className="li-reason">{c.notes}</p>}
+              </div>
+            ))}
           </div>
-        )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+        )) : <div className="empty-state">No tienes nada programado para este día.</div>}
       </>
     );
   } else if(view==='perfil'){
@@ -629,9 +668,9 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         {assignedChildren.length ? assignedChildren.map((c,i)=>(
           <div key={i} className="list-item">
             <p className="li-title">{c.child_name}</p>
-            {c.horario && <p className="li-sub">{c.horario}</p>}
+            <p className="li-sub">{c.program}{c.schedule?` · ${c.schedule}`:''}</p>
           </div>
-        )) : <div className="empty-state">No tienes niños asignados en el calendario todavía.</div>}
+        )) : <div className="empty-state">No tienes niños asignados todavía.</div>}
         <p className="section-title">Cambiar mi PIN</p>
         <form className="form-card" onSubmit={changeOwnPin}>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
@@ -1403,30 +1442,44 @@ function AdminApp({ user, onLogout, toast, Toast }){
             </div>
           </form>
         )}
-        {calEntries.length ? calEntries.map(c=>(
-          <div key={c.id} className="cal-entry">
-            <div className="li-top">
-              <div>
-                <p className="li-title">{c.teacher_name}</p>
-                <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}</p>
-                {c.notes && <p className="li-reason">{c.notes}</p>}
-              </div>
-              <div className="row-actions">
-                <button className="mini-btn" onClick={()=>setCalForm({ id:c.id, teacherId:c.teacher_id, childName:c.child_name, horario:c.horario, notes:c.notes })}><Icon name="edit" sw={1.6}/></button>
-                <button className="mini-btn" onClick={()=>deleteCalEntry(c.id)}><Icon name="trash" sw={1.6}/></button>
-              </div>
+        {(()=>{
+          const groups = groupByTime(calEntries);
+          return groups.length ? groups.map(g=>(
+            <div key={g.key} style={{marginBottom:18}}>
+              <p style={{fontWeight:600, fontSize:13.5, color:'var(--accent-dark)', marginBottom:8}}>{g.key}</p>
+              {g.items.map(c=>(
+                <div key={c.id} className="cal-entry">
+                  <div className="li-top">
+                    <div>
+                      <p className="li-title">{c.teacher_name}</p>
+                      <p className="li-sub">{c.child_name}{c.source==='auto' ? ' · automático' : ''}</p>
+                      {c.notes && <p className="li-reason">{c.notes}</p>}
+                    </div>
+                    {c.source!=='auto' && (
+                      <div className="row-actions">
+                        <button className="mini-btn" onClick={()=>setCalForm({ id:c.id, teacherId:c.teacher_id, childName:c.child_name, horario:c.horario, notes:c.notes })}><Icon name="edit" sw={1.6}/></button>
+                        <button className="mini-btn" onClick={()=>deleteCalEntry(c.id)}><Icon name="trash" sw={1.6}/></button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
-        )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
+          )) : <div className="empty-state">No hay nada programado para este día todavía.</div>;
+        })()}
         </>
         )}
       </>
     );
   } else if(view==='ninos'){
+    const activeChildrenCount = families.reduce((s,f)=> s + (f.active ? (f.items||[]).filter(it=>it.active!==false).length : 0), 0);
     content = (
       <>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:0}}>
-          <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
+          <div>
+            <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
+            {ninosView==='familias' && <p className="hint" style={{marginTop:2}}>{activeChildrenCount} niño{activeChildrenCount===1?'':'s'} activo{activeChildrenCount===1?'':'s'}</p>}
+          </div>
           <button className="link-btn" onClick={()=>setNinosView(ninosView==='familias'?'facturas':'familias')}>{ninosView==='familias' ? 'Ver facturas' : 'Ver familias'}</button>
         </div>
         {ninosView==='facturas' ? (
