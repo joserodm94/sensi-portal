@@ -431,6 +431,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [payroll, setPayroll] = useState([]);
   const [openNomina, setOpenNomina] = useState(null);
   const [vacationEnabled, setVacationEnabled] = useState(false);
+  const [solicitudTab, setSolicitudTab] = useState('permisos');
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -545,47 +546,56 @@ function TeacherApp({ user, onLogout, toast, Toast }){
           <p className="hint" style={{marginTop:10}}>Solo funciona conectada al wifi de Sensi.</p>
         </div>
         <div className="quick-actions">
-          {vacationEnabled && <button className="btn btn-primary" onClick={()=>setView('vacaciones')}>Pedir vacaciones</button>}
-          <button className="btn btn-outline" onClick={()=>setView('permisos')}>Pedir permiso</button>
+          {vacationEnabled && <button className="btn btn-primary" onClick={()=>{setSolicitudTab('vacaciones'); setView('solicitudes');}}>Pedir vacaciones</button>}
+          <button className="btn btn-outline" onClick={()=>{setSolicitudTab('permisos'); setView('solicitudes');}}>Pedir permiso</button>
         </div>
         <p className="section-title">Últimas solicitudes</p>
         {recent.length ? recent.map(r=><RequestItem key={r.id} r={r} />) : <div className="empty-state">Aún no has hecho ninguna solicitud.</div>}
       </>
     );
-  } else if(view==='vacaciones'){
+  } else if(view==='solicitudes'){
     const vacs = requests.filter(r=>r.type==='vacacion');
-    content = (
-      <>
-        <p className="section-title">Nueva solicitud</p>
-        <form className="form-card" onSubmit={submitVacation}>
-          <div className="two-col">
-            <div className="field"><label>Desde</label><input name="vacStart" type="date" required /></div>
-            <div className="field"><label>Hasta</label><input name="vacEnd" type="date" required /></div>
-          </div>
-          <div className="field"><label>Motivo (opcional)</label><textarea name="vacReason" placeholder="Ej. viaje familiar" /></div>
-          <button className="btn btn-primary" type="submit">Enviar solicitud</button>
-        </form>
-        <p className="section-title">Historial</p>
-        {vacs.length ? vacs.map(r=><RequestItem key={r.id} r={r} />) : <div className="empty-state">No has solicitado vacaciones todavía.</div>}
-      </>
-    );
-  } else if(view==='permisos'){
     const perms = requests.filter(r=>r.type==='permiso');
+    const tab = vacationEnabled ? solicitudTab : 'permisos';
     content = (
       <>
-        <p className="section-title">Nueva solicitud</p>
-        <form className="form-card" onSubmit={submitPermission}>
-          <div className="field"><label>Fecha</label><input name="permDate" type="date" required /></div>
-          <div className="field"><label>Tipo</label>
-            <select name="permType" defaultValue="Día completo">
-              <option>Día completo</option><option>Medio día</option><option>Horas específicas</option>
-            </select>
+        {vacationEnabled && (
+          <div className="role-tabs" style={{marginBottom:18}}>
+            <button className={`role-tab${tab==='vacaciones'?' active':''}`} onClick={()=>setSolicitudTab('vacaciones')}>Vacaciones</button>
+            <button className={`role-tab${tab==='permisos'?' active':''}`} onClick={()=>setSolicitudTab('permisos')}>Permisos</button>
           </div>
-          <div className="field"><label>Motivo</label><textarea name="permReason" placeholder="Ej. cita médica" required /></div>
-          <button className="btn btn-primary" type="submit">Enviar solicitud</button>
-        </form>
-        <p className="section-title">Historial</p>
-        {perms.length ? perms.map(r=><RequestItem key={r.id} r={r} />) : <div className="empty-state">No has solicitado permisos todavía.</div>}
+        )}
+        {tab==='vacaciones' ? (
+          <>
+            <p className="section-title">Nueva solicitud</p>
+            <form className="form-card" onSubmit={submitVacation}>
+              <div className="two-col">
+                <div className="field"><label>Desde</label><input name="vacStart" type="date" required /></div>
+                <div className="field"><label>Hasta</label><input name="vacEnd" type="date" required /></div>
+              </div>
+              <div className="field"><label>Motivo (opcional)</label><textarea name="vacReason" placeholder="Ej. viaje familiar" /></div>
+              <button className="btn btn-primary" type="submit">Enviar solicitud</button>
+            </form>
+            <p className="section-title">Historial</p>
+            {vacs.length ? vacs.map(r=><RequestItem key={r.id} r={r} />) : <div className="empty-state">No has solicitado vacaciones todavía.</div>}
+          </>
+        ) : (
+          <>
+            <p className="section-title">Nueva solicitud</p>
+            <form className="form-card" onSubmit={submitPermission}>
+              <div className="field"><label>Fecha</label><input name="permDate" type="date" required /></div>
+              <div className="field"><label>Tipo</label>
+                <select name="permType" defaultValue="Día completo">
+                  <option>Día completo</option><option>Medio día</option><option>Horas específicas</option>
+                </select>
+              </div>
+              <div className="field"><label>Motivo</label><textarea name="permReason" placeholder="Ej. cita médica" required /></div>
+              <button className="btn btn-primary" type="submit">Enviar solicitud</button>
+            </form>
+            <p className="section-title">Historial</p>
+            {perms.length ? perms.map(r=><RequestItem key={r.id} r={r} />) : <div className="empty-state">No has solicitado permisos todavía.</div>}
+          </>
+        )}
       </>
     );
   } else if(view==='nomina'){
@@ -687,8 +697,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
       <div className="content">{content}</div>
       <nav className="bottom-nav">
         <button className={`nav-btn${view==='inicio'?' active':''}`} onClick={()=>setView('inicio')}><Icon name="home"/><span>Inicio</span></button>
-        {vacationEnabled && <button className={`nav-btn${view==='vacaciones'?' active':''}`} onClick={()=>setView('vacaciones')}><Icon name="sun"/><span>Vacaciones</span></button>}
-        <button className={`nav-btn${view==='permisos'?' active':''}`} onClick={()=>setView('permisos')}><Icon name="calendar"/><span>Permisos</span></button>
+        <button className={`nav-btn${view==='solicitudes'?' active':''}`} onClick={()=>setView('solicitudes')}><Icon name="calendar"/><span>Solicitudes</span></button>
         <button className={`nav-btn${view==='nomina'?' active':''}`} onClick={()=>setView('nomina')}><Icon name="receipt"/><span>Nómina</span></button>
         <button className={`nav-btn${view==='calendario'?' active':''}`} onClick={()=>setView('calendario')}><Icon name="users"/><span>Calendario</span></button>
         <button className={`nav-btn${view==='perfil'?' active':''}`} onClick={()=>setView('perfil')}><Icon name="user"/><span>Perfil</span></button>
