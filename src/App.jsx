@@ -1408,13 +1408,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
             <div className="li-top">
               <div>
                 <p className="li-title">{c.teacher_name}</p>
-                <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}</p>
+                <p className="li-sub">{c.child_name}{c.horario ? ` · ${c.horario}` : ''}{c.source==='auto' ? ' · automático' : ''}</p>
                 {c.notes && <p className="li-reason">{c.notes}</p>}
               </div>
-              <div className="row-actions">
-                <button className="mini-btn" onClick={()=>setCalForm({ id:c.id, teacherId:c.teacher_id, childName:c.child_name, horario:c.horario, notes:c.notes })}><Icon name="edit" sw={1.6}/></button>
-                <button className="mini-btn" onClick={()=>deleteCalEntry(c.id)}><Icon name="trash" sw={1.6}/></button>
-              </div>
+              {c.source!=='auto' && (
+                <div className="row-actions">
+                  <button className="mini-btn" onClick={()=>setCalForm({ id:c.id, teacherId:c.teacher_id, childName:c.child_name, horario:c.horario, notes:c.notes })}><Icon name="edit" sw={1.6}/></button>
+                  <button className="mini-btn" onClick={()=>deleteCalEntry(c.id)}><Icon name="trash" sw={1.6}/></button>
+                </div>
+              )}
             </div>
           </div>
         )) : <div className="empty-state">No hay nada programado para este día todavía.</div>}
