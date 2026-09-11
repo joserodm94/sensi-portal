@@ -4,9 +4,9 @@
   --text:#1E2A22;
   --text-muted:#63756A;
   --border:#DCE3DD;
-  --accent:#2F6F62;
-  --accent-dark:#1E4B41;
-  --accent-soft:#DFEDE7;
+  --accent:#1E2260;
+  --accent-dark:#12143B;
+  --accent-soft:#E4E5F2;
   --warm:#DD7E1A;
   --warm-soft:#FBE7CC;
   --success:#3B7A57;
@@ -52,7 +52,8 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .role-tab.active{background:var(--accent);color:#fff;}
 .field{margin-bottom:16px;}
 .field label{display:block;font-size:13.5px;color:var(--text-muted);margin-bottom:6px;font-weight:500;}
-.field select,.field input,.field textarea{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--text);}
+.field select,.field input,.field textarea{width:100%;max-width:100%;min-width:0;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--text);}
+.field{min-width:0;}
 .field select:focus,.field input:focus,.field textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);}
 .field textarea{resize:vertical;min-height:70px;}
 .pin-input{letter-spacing:8px;font-size:20px;text-align:center;font-weight:600;}
@@ -125,9 +126,11 @@ input,select,textarea{font-family:inherit;font-size:15px;}
 .chip.active{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-dark);}
 
 .teacher-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px 16px;margin-bottom:10px;}
-.teacher-row-top{display:flex;justify-content:space-between;align-items:center;}
+.teacher-row-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.teacher-row-top > div:first-child{flex:1; min-width:0;}
+.teacher-row-top .row-actions{flex-shrink:0;}
 .teacher-name{font-weight:600;font-size:15px;}
-.teacher-meta{color:var(--text-muted);font-size:12.5px;margin-top:2px;}
+.teacher-meta{color:var(--text-muted);font-size:12.5px;margin-top:2px;word-break:break-word;}
 .teacher-row.inactive{opacity:0.55;}
 .row-actions{display:flex;gap:8px;}
 .mini-btn{background:var(--bg);border:none;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);}
