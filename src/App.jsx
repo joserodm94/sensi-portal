@@ -975,7 +975,16 @@ function AdminApp({ user, onLogout, toast, Toast }){
         p_entry_id: null, p_entry_date: calDate, p_teacher_id: tid,
         p_child_name: childName, p_horario: horario, p_notes: notes
       });
-      if(error) fail++; else ok++;
+      if(error){ fail++; continue; }
+      ok++;
+      const t = teachers.find(t=>t.id===tid);
+      if(t?.email){
+        sendNotification(t.email, 'Nuevo evento en tu calendario',
+          `<p>Hola ${t.name},</p><p>Se agregó algo nuevo a tu calendario para el <strong>${fmtDate(calDate)}</strong>:</p>
+           <p><strong>${childName}</strong>${horario?` · ${horario}`:''}</p>
+           ${notes?`<p>${notes}</p>`:''}
+           <p>— Sensi Portal</p>`);
+      }
     }
     toast(fail ? `${ok} guardadas, ${fail} con error.` : `Guardado para ${ok} maestra${ok===1?'':'s'}.`);
     setCalForm(null);
@@ -1033,6 +1042,19 @@ function AdminApp({ user, onLogout, toast, Toast }){
         if(error) fail++; else ok++;
       }
     }
+    // Un solo correo-resumen por maestra involucrada (no uno por cada día)
+    const byTeacher = {};
+    validLines.forEach(l=>{
+      if(!byTeacher[l.teacher.id]) byTeacher[l.teacher.id] = { teacher:l.teacher, items:[] };
+      byTeacher[l.teacher.id].items.push(l);
+    });
+    const rango = dates.length>1 ? `${fmtDate(dates[0])} – ${fmtDate(dates[dates.length-1])}` : fmtDate(dates[0]);
+    Object.values(byTeacher).forEach(({teacher, items})=>{
+      if(!teacher.email) return;
+      const rows = items.map(l=>`<li>${l.childName}${l.horario?` · ${l.horario}`:''}</li>`).join('');
+      sendNotification(teacher.email, 'Nuevo calendario asignado',
+        `<p>Hola ${teacher.name},</p><p>Se agregó a tu calendario, del <strong>${rango}</strong>:</p><ul>${rows}</ul><p>— Sensi Portal</p>`);
+    });
     setCalBulkBusy(false);
     toast(fail ? `${ok} guardadas, ${fail} con error.` : `${ok} entradas guardadas en el calendario.`);
     setCalBulkOpen(false);
