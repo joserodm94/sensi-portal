@@ -941,14 +941,34 @@ function AdminApp({ user, onLogout, toast, Toast }){
   async function saveCalEntry(e){
     e.preventDefault();
     const f = e.target;
-    const teacherId = f.teacherId.value, childName = f.childName.value.trim(), horario = f.horario.value.trim(), notes = f.notes.value.trim();
-    if(!teacherId || !childName){ toast('Completa maestra y niño.'); return; }
-    const { error } = await supabase.rpc('admin_save_calendar_entry', {
-      p_entry_id: calForm.id || null, p_entry_date: calDate, p_teacher_id: teacherId,
-      p_child_name: childName, p_horario: horario, p_notes: notes
-    });
-    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
-    toast('Guardado.');
+    const childName = f.childName.value.trim(), horario = f.horario.value.trim(), notes = f.notes.value.trim();
+    if(!childName){ toast('Escribe una descripción.'); return; }
+    if(calForm.id){
+      // Editando una entrada existente: sigue siendo una sola maestra
+      const teacherId = f.teacherId.value;
+      if(!teacherId){ toast('Selecciona la maestra.'); return; }
+      const { error } = await supabase.rpc('admin_save_calendar_entry', {
+        p_entry_id: calForm.id, p_entry_date: calDate, p_teacher_id: teacherId,
+        p_child_name: childName, p_horario: horario, p_notes: notes
+      });
+      if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+      toast('Guardado.');
+      setCalForm(null);
+      reloadCalendar();
+      return;
+    }
+    // Creando: puede ser para varias maestras a la vez
+    const teacherIds = calForm.teacherIds || [];
+    if(!teacherIds.length){ toast('Selecciona al menos una maestra.'); return; }
+    let ok=0, fail=0;
+    for(const tid of teacherIds){
+      const { error } = await supabase.rpc('admin_save_calendar_entry', {
+        p_entry_id: null, p_entry_date: calDate, p_teacher_id: tid,
+        p_child_name: childName, p_horario: horario, p_notes: notes
+      });
+      if(error) fail++; else ok++;
+    }
+    toast(fail ? `${ok} guardadas, ${fail} con error.` : `Guardado para ${ok} maestra${ok===1?'':'s'}.`);
     setCalForm(null);
     reloadCalendar();
   }
@@ -1372,7 +1392,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
         {!showAttendance && !calForm && !calBulkOpen && (
           <div style={{display:'flex',gap:8, marginBottom:16, marginTop:-8}}>
             <button className="btn btn-outline btn-sm" onClick={()=>{setCalBulkOpen(true); setCalBulkPreview(null);}}>Carga masiva</button>
-            <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherId:teachers[0]?.id||'' })}><Icon name="plus" sw={2}/> Agregar</button>
+            <button className="btn btn-warm btn-sm" onClick={()=>setCalForm({ id:null, teacherIds:[] })}><Icon name="plus" sw={2}/> Agregar</button>
           </div>
         )}
         {showAttendance ? (
@@ -1428,12 +1448,33 @@ function AdminApp({ user, onLogout, toast, Toast }){
         )}
         {calForm && (
           <form className="form-card" style={{marginBottom:16}} onSubmit={saveCalEntry}>
-            <div className="field"><label>Maestra</label>
-              <select name="teacherId" defaultValue={calForm.teacherId}>
-                {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </div>
-            <div className="field"><label>Niño/a</label><input name="childName" defaultValue={calForm.childName||''} placeholder="Ej. Piero Rodríguez" required /></div>
+            {calForm.id ? (
+              <div className="field"><label>Maestra</label>
+                <select name="teacherId" defaultValue={calForm.teacherId}>
+                  {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+            ) : (
+              <div className="field">
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                  <label style={{marginBottom:0}}>Maestra(s) — puedes elegir varias</label>
+                  <button type="button" className="link-btn" style={{marginTop:0}} onClick={()=>setCalForm(prev=>({ ...prev, teacherIds: (prev.teacherIds||[]).length===teachers.length ? [] : teachers.map(t=>t.id) }))}>
+                    {(calForm.teacherIds||[]).length===teachers.length ? 'Ninguna' : 'Todas'}
+                  </button>
+                </div>
+                <div className="chip-row" style={{marginBottom:0}}>
+                  {teachers.map(t=>(
+                    <button key={t.id} type="button" className={`chip${(calForm.teacherIds||[]).includes(t.id)?' active':''}`}
+                      onClick={()=>setCalForm(prev=>{
+                        const cur = prev.teacherIds||[];
+                        const next = cur.includes(t.id) ? cur.filter(x=>x!==t.id) : [...cur, t.id];
+                        return { ...prev, teacherIds: next };
+                      })}>{t.name}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="field"><label>Niño/a o descripción</label><input name="childName" defaultValue={calForm.childName||''} placeholder="Ej. Piero Rodríguez, o 'Reunión de equipo'" required /></div>
             <div className="field"><label>Horario</label><input name="horario" defaultValue={calForm.horario||''} placeholder="Ej. 9:00am - 10:00am" /></div>
             <div className="field"><label>Nota (opcional)</label><textarea name="notes" defaultValue={calForm.notes||''} /></div>
             <div className="li-actions">
