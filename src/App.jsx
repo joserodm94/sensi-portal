@@ -629,9 +629,9 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         {assignedChildren.length ? assignedChildren.map((c,i)=>(
           <div key={i} className="list-item">
             <p className="li-title">{c.child_name}</p>
-            {c.horario && <p className="li-sub">{c.horario}</p>}
+            <p className="li-sub">{c.program}{c.schedule?` · ${c.schedule}`:''}</p>
           </div>
-        )) : <div className="empty-state">No tienes niños asignados en el calendario todavía.</div>}
+        )) : <div className="empty-state">No tienes niños asignados todavía.</div>}
         <p className="section-title">Cambiar mi PIN</p>
         <form className="form-card" onSubmit={changeOwnPin}>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
@@ -1423,10 +1423,14 @@ function AdminApp({ user, onLogout, toast, Toast }){
       </>
     );
   } else if(view==='ninos'){
+    const activeChildrenCount = families.reduce((s,f)=> s + (f.active ? (f.items||[]).filter(it=>it.active!==false).length : 0), 0);
     content = (
       <>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:0}}>
-          <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
+          <div>
+            <p className="section-title" style={{margin:0}}>{ninosView==='familias' ? 'Niños y facturación' : 'Facturas'}</p>
+            {ninosView==='familias' && <p className="hint" style={{marginTop:2}}>{activeChildrenCount} niño{activeChildrenCount===1?'':'s'} activo{activeChildrenCount===1?'':'s'}</p>}
+          </div>
           <button className="link-btn" onClick={()=>setNinosView(ninosView==='familias'?'facturas':'familias')}>{ninosView==='familias' ? 'Ver facturas' : 'Ver familias'}</button>
         </div>
         {ninosView==='facturas' ? (
