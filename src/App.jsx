@@ -917,6 +917,16 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reloadNinos();
   }
 
+  async function resendReceipt(inv){
+    const html = buildReceiptHtml({
+      receipt_number: inv.receipt_number, invoice_number: inv.invoice_number,
+      tutor_name: inv.tutor_name_snapshot, total: inv.total, payment_date: inv.payment_date,
+      items_snapshot: inv.items_snapshot, billing_month: inv.billing_month
+    });
+    const ok = await sendNotification(inv.emails_snapshot, `Recibo de Pago Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
+    toast(ok ? 'Recibo reenviado.' : 'No se pudo enviar. Revisa el correo de la familia.');
+  }
+
   async function sendReminder(inv){
     const html = buildReminderHtml(inv);
     const ok = await sendNotification(inv.emails_snapshot, `Recordatorio de pago — Factura ${inv.invoice_number}`, html);
@@ -1599,6 +1609,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="li-actions">
                   <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
                   <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)}>Enviar recibo</button>
+                </div>
+              )}
+              {inv.status==='pagada' && (
+                <div className="li-actions">
+                  <button className="btn btn-outline btn-sm" onClick={()=>resendReceipt(inv)}>Reenviar recibo</button>
                 </div>
               )}
             </div>
