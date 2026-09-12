@@ -80,6 +80,39 @@ const BRAND_STRIP_HTML = `
     <td style="background:#4A93C9; height:6px; width:20%;"></td>
   </tr></table>`;
 
+function guessGenderEs(name){
+  const first = (name||'').trim().split(/\s+/)[0]?.toLowerCase() || '';
+  const maleExceptions = ['luca','joshua','elias','matias','tobias'];
+  if(maleExceptions.includes(first)) return 'm';
+  if(first.endsWith('a') || first.endsWith('ia')) return 'f';
+  return 'm';
+}
+
+function fechaLarga(d){
+  const dt = d ? new Date(d+'T00:00:00') : new Date();
+  return `${dt.getDate()} de ${MONTHS_ES[dt.getMonth()]} de ${dt.getFullYear()}`;
+}
+
+function buildWorkLetterHtml(teacher, signerName, signerTitle){
+  const g = guessGenderEs(teacher.name);
+  const articulo = g==='f' ? 'la señora' : 'el señor';
+  const portador = g==='f' ? 'portadora' : 'portador';
+  const logoUrl = `${window.location.origin}/sensi-logo.png`;
+  return `
+  <div style="font-family:Georgia,serif; max-width:600px; color:#2B2B2B;">
+    <img src="${logoUrl}" alt="Sensi" style="width:70px; height:70px; border-radius:14px; margin-bottom:18px;" />
+    <p>Santo Domingo, R.D.<br>${fechaLarga()}</p>
+    <p style="text-align:center; font-weight:bold; letter-spacing:0.5px; margin:28px 0;">A QUIEN PUEDA INTERESAR</p>
+    <p>Por medio de la presente certificamos que ${articulo} <strong>${teacher.name}</strong>, ${portador} de la Cédula de Identidad y Electoral Núm. <strong>${teacher.cedula||'—'}</strong>, labora en <strong>Sensi SRL</strong> desde el <strong>${fmtDate(teacher.hire_date)}</strong>, desempeñándose actualmente como Maestra${teacher.work_schedule?`, con un horario laboral de ${teacher.work_schedule}`:''}.</p>
+    ${teacher.monthly_salary ? `<p>Devenga un salario mensual de <strong>${fmtMoney(teacher.monthly_salary)}</strong>.</p>` : ''}
+    <p>La presente certificación se expide a solicitud de la parte interesada, a los ${new Date().getDate()} días del mes de ${MONTHS_ES[new Date().getMonth()]} de ${new Date().getFullYear()}.</p>
+    <p style="margin-top:28px;">Atentamente,</p>
+    <p style="margin-top:56px;">_____________________________<br>
+    ${signerName || 'Administración'}<br>
+    ${signerTitle || 'Sensi SRL'}</p>
+  </div>`;
+}
+
 function buildReminderHtml(inv){
   const items = inv.items_snapshot || [];
   const rows = items.map(it=>`
@@ -432,6 +465,9 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   const [openNomina, setOpenNomina] = useState(null);
   const [vacationEnabled, setVacationEnabled] = useState(false);
   const [solicitudTab, setSolicitudTab] = useState('permisos');
+  const [workLetterEnabled, setWorkLetterEnabled] = useState(false);
+  const [letterSigner, setLetterSigner] = useState({ name:'', title:'' });
+  const [letterBusy, setLetterBusy] = useState(false);
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -450,7 +486,11 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(b.data && b.data[0]) setBalance(b.data[0]);
     if(r.data) setRequests(r.data);
     if(p.data) setPayroll(p.data);
-    if(s.data && s.data[0]) setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+    if(s.data && s.data[0]){
+      setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+      setWorkLetterEnabled(!!s.data[0].work_letter_enabled);
+      setLetterSigner({ name:s.data[0].letter_signer_name||'', title:s.data[0].letter_signer_title||'' });
+    }
     if(a.data) setAttendance(a.data);
   },[user.id]);
 
@@ -466,6 +506,16 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     supabase.rpc('get_teacher_profile', { p_teacher_id: user.id }).then(({data})=>{ if(data && data[0]) setProfile(data[0]); });
     supabase.rpc('get_teacher_assigned_children', { p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
   },[view, user.id]);
+
+  async function requestWorkLetter(){
+    if(!profile){ toast('Espera a que cargue tu perfil.'); return; }
+    if(!profile.email){ toast('No tienes correo registrado. Pídele a la administración que te lo agregue.'); return; }
+    setLetterBusy(true);
+    const html = buildWorkLetterHtml({ ...profile, name: profile.name || user.name }, letterSigner.name, letterSigner.title);
+    const ok = await sendNotification(profile.email, 'Carta laboral — Sensi SRL', html);
+    setLetterBusy(false);
+    toast(ok ? 'Te enviamos tu carta laboral por correo.' : 'No se pudo enviar. Intenta de nuevo.');
+  }
 
   async function changeOwnPin(e){
     e.preventDefault();
@@ -681,6 +731,15 @@ function TeacherApp({ user, onLogout, toast, Toast }){
             <p className="li-sub">{c.program}{c.schedule?` · ${c.schedule}`:''}</p>
           </div>
         )) : <div className="empty-state">No tienes niños asignados todavía.</div>}
+        {workLetterEnabled && (
+          <>
+            <p className="section-title">Carta laboral</p>
+            <div className="form-card" style={{marginBottom:18}}>
+              <p className="hint" style={{marginBottom:10}}>Se envía a tu correo registrado con tus datos actuales.</p>
+              <button className="btn btn-primary" disabled={letterBusy} onClick={requestWorkLetter}>{letterBusy?'Enviando…':'Solicitar carta laboral'}</button>
+            </div>
+          </>
+        )}
         <p className="section-title">Cambiar mi PIN</p>
         <form className="form-card" onSubmit={changeOwnPin}>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
@@ -774,6 +833,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [familyItemForm, setFamilyItemForm] = useState(null); // {id, familyId, ...}
   const [sendingInvoiceFor, setSendingInvoiceFor] = useState(null);
   const [officeIp, setOfficeIp] = useState('');
+  const [workLetterEnabled, setWorkLetterEnabled] = useState(false);
+  const [letterSignerName, setLetterSignerName] = useState('');
+  const [letterSignerTitle, setLetterSignerTitle] = useState('');
+  const [letterTeacherId, setLetterTeacherId] = useState('');
+  const [letterBusy, setLetterBusy] = useState(false);
   const [adminEmail, setAdminEmail] = useState('');
   const [showAttendance, setShowAttendance] = useState(false);
   const [attendanceDay, setAttendanceDay] = useState([]);
@@ -795,7 +859,14 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
     if(p.data) setPayroll(p.data);
-    if(s.data && s.data[0]){ setVacationEnabled(!!s.data[0].vacation_requests_enabled); setOfficeIp(s.data[0].office_ip||''); setAdminEmail(s.data[0].admin_email||''); }
+    if(s.data && s.data[0]){
+      setVacationEnabled(!!s.data[0].vacation_requests_enabled);
+      setOfficeIp(s.data[0].office_ip||'');
+      setAdminEmail(s.data[0].admin_email||'');
+      setWorkLetterEnabled(!!s.data[0].work_letter_enabled);
+      setLetterSignerName(s.data[0].letter_signer_name||'');
+      setLetterSignerTitle(s.data[0].letter_signer_title||'');
+    }
   },[]);
 
   const reloadCalendar = useCallback(async ()=>{
@@ -947,6 +1018,32 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const { error } = await supabase.rpc('admin_set_recovery_email', { p_email: adminEmail.trim() });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Correo de recuperación guardado.');
+  }
+
+  async function toggleWorkLetterEnabled(){
+    const next = !workLetterEnabled;
+    const { error } = await supabase.rpc('admin_set_work_letter_enabled', { p_enabled: next });
+    if(error){ toast('No se pudo guardar.'); return; }
+    setWorkLetterEnabled(next);
+    toast(next ? 'Carta laboral disponible para las maestras.' : 'Carta laboral oculta para las maestras.');
+  }
+
+  async function saveLetterSigner(){
+    const { error } = await supabase.rpc('admin_set_letter_signer', { p_name: letterSignerName.trim(), p_title: letterSignerTitle.trim() });
+    if(error){ toast('No se pudo guardar.'); return; }
+    toast('Firma guardada.');
+  }
+
+  async function sendWorkLetterAsAdmin(){
+    const teacher = teachers.find(t=>t.id===letterTeacherId);
+    if(!teacher){ toast('Selecciona una maestra.'); return; }
+    if(!teacher.cedula || !teacher.hire_date){ toast('Falta cédula o fecha de entrada de esa maestra. Complétalo en Maestras primero.'); return; }
+    if(!teacher.email){ toast('Esa maestra no tiene correo registrado.'); return; }
+    setLetterBusy(true);
+    const html = buildWorkLetterHtml(teacher, letterSignerName, letterSignerTitle);
+    const ok = await sendNotification(teacher.email, 'Carta laboral — Sensi SRL', html);
+    setLetterBusy(false);
+    toast(ok ? 'Carta laboral enviada.' : 'No se pudo enviar. Revisa el correo de la maestra.');
   }
 
   async function toggleVacationEnabled(){
@@ -1746,6 +1843,30 @@ function AdminApp({ user, onLogout, toast, Toast }){
           <div className="field"><label>Correo</label><input type="email" value={adminEmail} onChange={e=>setAdminEmail(e.target.value)} placeholder="admin@correo.com" /></div>
           <p className="hint" style={{marginBottom:12}}>Si olvidas el PIN de administración, el nuevo se envía a este correo.</p>
           <button className="btn btn-primary" onClick={saveAdminEmail}>Guardar</button>
+        </div>
+        <p className="section-title">Cartas laborales</p>
+        <div className="form-card" style={{marginBottom:14, display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <div>
+            <p style={{fontWeight:600, fontSize:14.5}}>Visible para las maestras</p>
+            <p className="hint" style={{marginTop:4}}>{workLetterEnabled ? 'Las maestras pueden pedir su carta laboral desde su Perfil.' : 'Está oculta — solo tú puedes enviarla desde aquí.'}</p>
+          </div>
+          <button className={`btn btn-sm ${workLetterEnabled?'btn-outline':'btn-warm'}`} onClick={toggleWorkLetterEnabled}>{workLetterEnabled ? 'Ocultar' : 'Activar'}</button>
+        </div>
+        <div className="form-card" style={{marginBottom:14}}>
+          <p style={{fontWeight:600, fontSize:14.5, marginBottom:10}}>Firma de la carta</p>
+          <div className="field"><label>Nombre de quien firma</label><input value={letterSignerName} onChange={e=>setLetterSignerName(e.target.value)} placeholder="Ej. Jose Rodríguez" /></div>
+          <div className="field"><label>Cargo</label><input value={letterSignerTitle} onChange={e=>setLetterSignerTitle(e.target.value)} placeholder="Ej. Director General" /></div>
+          <button className="btn btn-primary btn-sm" onClick={saveLetterSigner}>Guardar firma</button>
+        </div>
+        <div className="form-card">
+          <p style={{fontWeight:600, fontSize:14.5, marginBottom:10}}>Enviar carta laboral</p>
+          <div className="field"><label>Maestra</label>
+            <select value={letterTeacherId} onChange={e=>setLetterTeacherId(e.target.value)}>
+              <option value="">Selecciona una maestra</option>
+              {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+          <button className="btn btn-primary btn-sm" disabled={letterBusy || !letterTeacherId} onClick={sendWorkLetterAsAdmin}>{letterBusy?'Enviando…':'Enviar carta laboral'}</button>
         </div>
         <p className="section-title">Red de Sensi (para el log de entrada/salida)</p>
         <div className="form-card">
