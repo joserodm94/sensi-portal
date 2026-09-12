@@ -117,8 +117,7 @@ function buildWorkLetterHtml(teacher, signerName, signerTitle){
 function buildLetterCoverHtml(teacherName){
   return `
   <div style="font-family:Georgia,serif; color:#2B2B2B;">
-    <p>Hola ${teacherName},</p>
-    <p>Adjunto encontrarás tu carta laboral.</p>
+    <p>${teacherName}, adjunto carta laboral solicitada.</p>
     <p>— Sensi Portal</p>
   </div>`;
 }
@@ -175,6 +174,9 @@ async function buildWorkLetterPdfBase64(teacher, signerName, signerTitle){
   doc.text('_____________________________', marginX, y); y += 16;
   doc.text(signerName || 'Administración', marginX, y); y += 16;
   doc.text(signerTitle || 'Sensi SRL', marginX, y);
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(150);
+  doc.text('sensi.oneonone@gmail.com  ·  829-686-7561', 306, 740, { align:'center' });
 
   const dataUri = doc.output('datauristring');
   return dataUri.split(',')[1];
