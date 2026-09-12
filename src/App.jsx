@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from './supabaseClient.js';
+import jsPDF from 'jspdf';
+import 'html2canvas';
 
 const MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const DEFAULT_VACATION_DAYS = 14;
@@ -99,11 +101,11 @@ function buildWorkLetterHtml(teacher, signerName, signerTitle){
   const portador = g==='f' ? 'portadora' : 'portador';
   const logoUrl = `${window.location.origin}/sensi-logo.png`;
   return `
-  <div style="font-family:Georgia,serif; max-width:600px; color:#2B2B2B;">
+  <div style="font-family:Georgia,serif; max-width:600px; color:#2B2B2B; background:#fff; padding:10px;">
     <img src="${logoUrl}" alt="Sensi" style="width:70px; height:70px; border-radius:14px; margin-bottom:18px;" />
     <p>Santo Domingo, R.D.<br>${fechaLarga()}</p>
     <p style="text-align:center; font-weight:bold; letter-spacing:0.5px; margin:28px 0;">A QUIEN PUEDA INTERESAR</p>
-    <p>Por medio de la presente certificamos que ${articulo} <strong>${teacher.name}</strong>, ${portador} de la Cédula de Identidad y Electoral Núm. <strong>${teacher.cedula||'—'}</strong>, labora en <strong>Sensi SRL</strong> desde el <strong>${fmtDate(teacher.hire_date)}</strong>, desempeñándose actualmente como Maestra${teacher.work_schedule?`, con un horario laboral de ${teacher.work_schedule}`:''}.</p>
+    <p>Por medio de la presente certificamos que ${articulo} <strong>${teacher.name}</strong>, ${portador} de la Cédula de Identidad y Electoral Núm. <strong>${teacher.cedula||'—'}</strong>, labora en <strong>Sensi SRL</strong> desde el <strong>${fmtDate(teacher.hire_date)}</strong>, desempeñándose actualmente como Maestra.</p>
     ${teacher.monthly_salary ? `<p>Devenga un salario mensual de <strong>${fmtMoney(teacher.monthly_salary)}</strong>.</p>` : ''}
     <p>La presente certificación se expide a solicitud de la parte interesada, a los ${new Date().getDate()} días del mes de ${MONTHS_ES[new Date().getMonth()]} de ${new Date().getFullYear()}.</p>
     <p style="margin-top:28px;">Atentamente,</p>
@@ -111,6 +113,38 @@ function buildWorkLetterHtml(teacher, signerName, signerTitle){
     ${signerName || 'Administración'}<br>
     ${signerTitle || 'Sensi SRL'}</p>
   </div>`;
+}
+
+function buildLetterCoverHtml(teacherName){
+  return `
+  <div style="font-family:Georgia,serif; color:#2B2B2B;">
+    <p>Hola ${teacherName},</p>
+    <p>Adjunto encontrarás tu carta laboral.</p>
+    <p>— Sensi Portal</p>
+  </div>`;
+}
+
+async function htmlToPdfBase64(html){
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '-9999px';
+  container.style.top = '0';
+  container.style.width = '600px';
+  container.innerHTML = html;
+  document.body.appendChild(container);
+  try{
+    const doc = new jsPDF({ unit:'pt', format:'letter' });
+    await new Promise((resolve,reject)=>{
+      doc.html(container, {
+        x:24, y:24, width:550, windowWidth:600,
+        callback: ()=>resolve(),
+      });
+    });
+    const dataUri = doc.output('datauristring');
+    return dataUri.split(',')[1];
+  } finally {
+    document.body.removeChild(container);
+  }
 }
 
 function buildReminderHtml(inv){
@@ -188,11 +222,13 @@ function buildReceiptHtml(r){
   </div>`;
 }
 
-async function sendNotification(to, subject, html){
+async function sendNotification(to, subject, html, attachments){
   if(!to) return false;
   try{
+    const body = { to, subject, html };
+    if(attachments) body.attachments = attachments;
     const { error } = await supabase.functions.invoke('send-mail', {
-      body: { to, subject, html },
+      body,
       headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
     });
     if(error){ console.error('email error', error); return false; }
@@ -511,8 +547,14 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(!profile){ toast('Espera a que cargue tu perfil.'); return; }
     if(!profile.email){ toast('No tienes correo registrado. Pídele a la administración que te lo agregue.'); return; }
     setLetterBusy(true);
-    const html = buildWorkLetterHtml({ ...profile, name: profile.name || user.name }, letterSigner.name, letterSigner.title);
-    const ok = await sendNotification(profile.email, 'Carta laboral — Sensi SRL', html);
+    const teacherData = { ...profile, name: profile.name || user.name };
+    const letterHtml = buildWorkLetterHtml(teacherData, letterSigner.name, letterSigner.title);
+    let ok = false;
+    try{
+      const pdfBase64 = await htmlToPdfBase64(letterHtml);
+      ok = await sendNotification(profile.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacherData.name),
+        [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
+    }catch(e){ console.error(e); }
     setLetterBusy(false);
     toast(ok ? 'Te enviamos tu carta laboral por correo.' : 'No se pudo enviar. Intenta de nuevo.');
   }
@@ -1040,8 +1082,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(!teacher.cedula || !teacher.hire_date){ toast('Falta cédula o fecha de entrada de esa maestra. Complétalo en Maestras primero.'); return; }
     if(!teacher.email){ toast('Esa maestra no tiene correo registrado.'); return; }
     setLetterBusy(true);
-    const html = buildWorkLetterHtml(teacher, letterSignerName, letterSignerTitle);
-    const ok = await sendNotification(teacher.email, 'Carta laboral — Sensi SRL', html);
+    const letterHtml = buildWorkLetterHtml(teacher, letterSignerName, letterSignerTitle);
+    let ok = false;
+    try{
+      const pdfBase64 = await htmlToPdfBase64(letterHtml);
+      ok = await sendNotification(teacher.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacher.name),
+        [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
+    }catch(e){ console.error(e); }
     setLetterBusy(false);
     toast(ok ? 'Carta laboral enviada.' : 'No se pudo enviar. Revisa el correo de la maestra.');
   }
