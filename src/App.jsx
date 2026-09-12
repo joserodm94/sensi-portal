@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from './supabaseClient.js';
 import jsPDF from 'jspdf';
-import 'html2canvas';
 
 const MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const DEFAULT_VACATION_DAYS = 14;
@@ -124,27 +123,61 @@ function buildLetterCoverHtml(teacherName){
   </div>`;
 }
 
-async function htmlToPdfBase64(html){
-  const container = document.createElement('div');
-  container.style.position = 'fixed';
-  container.style.left = '-9999px';
-  container.style.top = '0';
-  container.style.width = '600px';
-  container.innerHTML = html;
-  document.body.appendChild(container);
+async function loadImageAsDataUrl(url){
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onloadend = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function buildWorkLetterPdfBase64(teacher, signerName, signerTitle){
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const marginX = 60, pageWidth = 495;
+  let y = 60;
+
   try{
-    const doc = new jsPDF({ unit:'pt', format:'letter' });
-    await new Promise((resolve,reject)=>{
-      doc.html(container, {
-        x:24, y:24, width:550, windowWidth:600,
-        callback: ()=>resolve(),
-      });
-    });
-    const dataUri = doc.output('datauristring');
-    return dataUri.split(',')[1];
-  } finally {
-    document.body.removeChild(container);
+    const logoDataUrl = await loadImageAsDataUrl(`${window.location.origin}/sensi-logo.png`);
+    doc.addImage(logoDataUrl, 'PNG', marginX, y, 50, 50);
+  }catch(e){ console.error('logo load failed', e); }
+  y += 78;
+
+  doc.setFont('times','normal'); doc.setFontSize(11);
+  doc.text('Santo Domingo, R.D.', marginX, y); y += 16;
+  doc.text(fechaLarga(), marginX, y); y += 40;
+
+  doc.setFont('times','bold'); doc.setFontSize(12);
+  doc.text('A QUIEN PUEDA INTERESAR', 306, y, { align:'center' }); y += 36;
+
+  doc.setFont('times','normal'); doc.setFontSize(11);
+  const g = guessGenderEs(teacher.name);
+  const articulo = g==='f' ? 'la señora' : 'el señor';
+  const portador = g==='f' ? 'portadora' : 'portador';
+
+  const p1 = `Por medio de la presente certificamos que ${articulo} ${teacher.name}, ${portador} de la Cédula de Identidad y Electoral Núm. ${teacher.cedula||'—'}, labora en Sensi SRL desde el ${fmtDate(teacher.hire_date)}, desempeñándose actualmente como Maestra.`;
+  let lines = doc.splitTextToSize(p1, pageWidth);
+  doc.text(lines, marginX, y); y += lines.length*15 + 18;
+
+  if(teacher.monthly_salary){
+    const p2 = `Devenga un salario mensual de ${fmtMoney(teacher.monthly_salary)}.`;
+    lines = doc.splitTextToSize(p2, pageWidth);
+    doc.text(lines, marginX, y); y += lines.length*15 + 18;
   }
+
+  const p3 = `La presente certificación se expide a solicitud de la parte interesada, a los ${new Date().getDate()} días del mes de ${MONTHS_ES[new Date().getMonth()]} de ${new Date().getFullYear()}.`;
+  lines = doc.splitTextToSize(p3, pageWidth);
+  doc.text(lines, marginX, y); y += lines.length*15 + 40;
+
+  doc.text('Atentamente,', marginX, y); y += 70;
+  doc.text('_____________________________', marginX, y); y += 16;
+  doc.text(signerName || 'Administración', marginX, y); y += 16;
+  doc.text(signerTitle || 'Sensi SRL', marginX, y);
+
+  const dataUri = doc.output('datauristring');
+  return dataUri.split(',')[1];
 }
 
 function buildReminderHtml(inv){
@@ -548,10 +581,9 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     if(!profile.email){ toast('No tienes correo registrado. Pídele a la administración que te lo agregue.'); return; }
     setLetterBusy(true);
     const teacherData = { ...profile, name: profile.name || user.name };
-    const letterHtml = buildWorkLetterHtml(teacherData, letterSigner.name, letterSigner.title);
     let ok = false;
     try{
-      const pdfBase64 = await htmlToPdfBase64(letterHtml);
+      const pdfBase64 = await buildWorkLetterPdfBase64(teacherData, letterSigner.name, letterSigner.title);
       ok = await sendNotification(profile.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacherData.name),
         [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
     }catch(e){ console.error(e); }
@@ -1082,10 +1114,9 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(!teacher.cedula || !teacher.hire_date){ toast('Falta cédula o fecha de entrada de esa maestra. Complétalo en Maestras primero.'); return; }
     if(!teacher.email){ toast('Esa maestra no tiene correo registrado.'); return; }
     setLetterBusy(true);
-    const letterHtml = buildWorkLetterHtml(teacher, letterSignerName, letterSignerTitle);
     let ok = false;
     try{
-      const pdfBase64 = await htmlToPdfBase64(letterHtml);
+      const pdfBase64 = await buildWorkLetterPdfBase64(teacher, letterSignerName, letterSignerTitle);
       ok = await sendNotification(teacher.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacher.name),
         [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
     }catch(e){ console.error(e); }
