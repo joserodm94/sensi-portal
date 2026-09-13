@@ -364,8 +364,8 @@ function Login({ onLogin, toast, Toast }){
     const { data, error } = await supabase.rpc('login_teacher', { p_name: t?.name || '', p_pin: pin.trim() });
     setBusy(false);
     if(error){ setError('No se pudo conectar. Intenta de nuevo.'); return; }
-    if(!data || !data.length){ setError('PIN incorrecto.'); return; }
-    const row = data[0];
+    const row = data && data[0];
+    if(!row || !row.ok){ setError((row && row.message) || 'PIN incorrecto.'); return; }
     onLogin({ role:'teacher', id: row.id, name: row.name });
   }
 
@@ -375,7 +375,8 @@ function Login({ onLogin, toast, Toast }){
     const { data, error } = await supabase.rpc('login_admin', { p_pin: adminPin.trim() });
     setBusy(false);
     if(error){ setError('No se pudo conectar. Intenta de nuevo.'); return; }
-    if(!data){ setError('PIN incorrecto.'); return; }
+    const row = data && data[0];
+    if(!row || !row.ok){ setError((row && row.message) || 'PIN incorrecto.'); return; }
     onLogin({ role:'admin', name:'Administración' });
   }
 
@@ -1295,8 +1296,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     if(!name){ toast('Escribe el nombre.'); return; }
-    if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    if(pin && !/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1477,7 +1478,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
             <form key={t.id} className="form-card" style={{marginBottom:10}} onSubmit={(e)=>saveEditedTeacher(e,t.id)}>
               <div className="field"><label>Nombre</label><input name="name" defaultValue={t.name} required /></div>
               <div className="two-col">
-                <div className="field"><label>PIN (4 dígitos)</label><input name="pin" defaultValue={t.pin} inputMode="numeric" maxLength={4} /></div>
+                <div className="field"><label>Nuevo PIN (opcional)</label><input name="pin" placeholder="Dejar en blanco para no cambiar" inputMode="numeric" maxLength={4} /></div>
                 <div className="field"><label>Días de vacaciones/año</label><input name="vacDays" type="number" min="0" defaultValue={t.vacation_days_total||0} /></div>
               </div>
               <div className="field"><label>Días ya usados</label><input name="vacUsed" type="number" min="0" defaultValue={t.vacation_days_used||0} /></div>
