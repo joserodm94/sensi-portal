@@ -257,14 +257,14 @@ function buildReceiptHtml(r){
   </div>`;
 }
 
-async function sendNotification(to, subject, html, attachments){
+async function sendNotification(session, to, subject, html, attachments){
   if(!to) return false;
   try{
     const body = { to, subject, html };
     if(attachments) body.attachments = attachments;
     const { error } = await supabase.functions.invoke('send-mail', {
       body,
-      headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+      headers: { 'x-session-token': session || '' },
     });
     if(error){ console.error('email error', error); return false; }
     return true;
@@ -366,7 +366,7 @@ function Login({ onLogin, toast, Toast }){
     if(error){ setError('No se pudo conectar. Intenta de nuevo.'); return; }
     const row = data && data[0];
     if(!row || !row.ok){ setError((row && row.message) || 'PIN incorrecto.'); return; }
-    onLogin({ role:'teacher', id: row.id, name: row.name });
+    onLogin({ role:'teacher', id: row.id, name: row.name, session: row.session_token });
   }
 
   async function doAdminLogin(e){
@@ -377,7 +377,7 @@ function Login({ onLogin, toast, Toast }){
     if(error){ setError('No se pudo conectar. Intenta de nuevo.'); return; }
     const row = data && data[0];
     if(!row || !row.ok){ setError((row && row.message) || 'PIN incorrecto.'); return; }
-    onLogin({ role:'admin', name:'Administración' });
+    onLogin({ role:'admin', name:'Administración', session: row.session_token });
   }
 
   async function recoverTeacherPin(){
@@ -385,22 +385,18 @@ function Login({ onLogin, toast, Toast }){
     setRecoverBusy(true);
     const { data, error } = await supabase.rpc('request_teacher_pin_reset', { p_teacher_id: teacherId });
     const r = data && data[0];
-    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
-    await sendNotification(r.email, 'Tu nuevo PIN de acceso a Sensi Portal',
-      `<p>Hola ${r.teacher_name},</p><p>Tu nuevo PIN de acceso es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
     setRecoverBusy(false);
-    toast('Te enviamos un nuevo PIN a tu correo.');
+    if(error || !r || !r.ok){ toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    toast(r.message || 'Te enviamos un nuevo PIN a tu correo.');
   }
 
   async function recoverAdminPin(){
     setRecoverBusy(true);
     const { data, error } = await supabase.rpc('request_admin_pin_reset');
     const r = data && data[0];
-    if(error || !r || !r.ok){ setRecoverBusy(false); toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
-    await sendNotification(r.email, 'Nuevo PIN de administración de Sensi Portal',
-      `<p>Tu nuevo PIN de administración es: <strong style="font-size:20px;">${r.new_pin}</strong></p><p>— Sensi Portal</p>`);
     setRecoverBusy(false);
-    toast('Te enviamos un nuevo PIN al correo de recuperación.');
+    if(error || !r || !r.ok){ toast((r && r.message) || 'No se pudo procesar la solicitud.'); return; }
+    toast(r.message || 'Te enviamos un nuevo PIN al correo de recuperación.');
   }
 
   return (
@@ -549,11 +545,11 @@ function TeacherApp({ user, onLogout, toast, Toast }){
 
   const reload = useCallback(async ()=>{
     const [b, r, p, s, a] = await Promise.all([
-      supabase.rpc('get_teacher_balance', { p_teacher_id: user.id }),
-      supabase.rpc('get_teacher_requests', { p_teacher_id: user.id }),
-      supabase.rpc('get_teacher_payroll', { p_teacher_id: user.id }),
-      supabase.rpc('get_public_settings'),
-      supabase.rpc('get_teacher_attendance', { p_teacher_id: user.id, p_date: todayStr() }),
+      supabase.rpc('get_teacher_balance', { p_session: user.session,  p_teacher_id: user.id }),
+      supabase.rpc('get_teacher_requests', { p_session: user.session,  p_teacher_id: user.id }),
+      supabase.rpc('get_teacher_payroll', { p_session: user.session,  p_teacher_id: user.id }),
+      supabase.rpc('get_public_settings', { p_session: user.session }),
+      supabase.rpc('get_teacher_attendance', { p_session: user.session,  p_teacher_id: user.id, p_date: todayStr() }),
     ]);
     if(b.data && b.data[0]) setBalance(b.data[0]);
     if(r.data) setRequests(r.data);
@@ -570,13 +566,13 @@ function TeacherApp({ user, onLogout, toast, Toast }){
 
   useEffect(()=>{
     if(view!=='calendario') return;
-    supabase.rpc('get_calendar_day', { p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
+    supabase.rpc('get_calendar_day', { p_session: user.session,  p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
   },[view, calDate]);
 
   useEffect(()=>{
     if(view!=='perfil') return;
-    supabase.rpc('get_teacher_profile', { p_teacher_id: user.id }).then(({data})=>{ if(data && data[0]) setProfile(data[0]); });
-    supabase.rpc('get_teacher_assigned_children', { p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
+    supabase.rpc('get_teacher_profile', { p_session: user.session,  p_teacher_id: user.id }).then(({data})=>{ if(data && data[0]) setProfile(data[0]); });
+    supabase.rpc('get_teacher_assigned_children', { p_session: user.session,  p_teacher_id: user.id }).then(({data})=>{ if(data) setAssignedChildren(data); });
   },[view, user.id]);
 
   async function requestWorkLetter(){
@@ -587,7 +583,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     let ok = false;
     try{
       const pdfBase64 = await buildWorkLetterPdfBase64(teacherData, letterSigner.name, letterSigner.title);
-      ok = await sendNotification(profile.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacherData.name),
+      ok = await sendNotification(user.session, profile.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacherData.name),
         [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
     }catch(e){ console.error(e); }
     setLetterBusy(false);
@@ -597,18 +593,19 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   async function changeOwnPin(e){
     e.preventDefault();
     const f = e.target;
-    const p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
+    const oldPin = f.oldPin.value.trim(), p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
     if(!/^\d{4}$/.test(p1)){ toast('El PIN debe ser de 4 dígitos.'); return; }
     if(p1!==p2){ toast('Los PIN no coinciden.'); return; }
-    const { error } = await supabase.rpc('teacher_change_own_pin', { p_teacher_id:user.id, p_new_pin:p1 });
-    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    const { data, error } = await supabase.rpc('teacher_change_own_pin', { p_session:user.session, p_teacher_id:user.id, p_old_pin:oldPin, p_new_pin:p1 });
+    const r = data && data[0];
+    if(error || !r || !r.ok){ toast((r && r.message) || 'No se pudo guardar.'); return; }
     toast('PIN actualizado.');
     f.reset();
   }
 
   async function markAttendance(type){
     setAttBusy(true);
-    const { data, error } = await supabase.rpc('log_attendance', { p_teacher_id:user.id, p_type:type });
+    const { data, error } = await supabase.rpc('log_attendance', { p_session: user.session,  p_teacher_id:user.id, p_type:type });
     setAttBusy(false);
     const result = data && data[0];
     if(error || !result || !result.ok){ toast((result && result.message) || 'No se pudo registrar.'); return; }
@@ -628,7 +625,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const start = e.target.vacStart.value, end = e.target.vacEnd.value, reason = e.target.vacReason.value.trim();
     if(!start||!end){ toast('Completa las fechas.'); return; }
-    const { error } = await supabase.rpc('submit_vacation_request', { p_teacher_id:user.id, p_start_date:start, p_end_date:end, p_reason:reason });
+    const { error } = await supabase.rpc('submit_vacation_request', { p_session: user.session,  p_teacher_id:user.id, p_start_date:start, p_end_date:end, p_reason:reason });
     if(error){ toast(error.message.includes('posterior') ? 'La fecha final debe ser igual o posterior a la inicial.' : 'No se pudo enviar. Intenta de nuevo.'); return; }
     toast('Solicitud de vacaciones enviada.');
     e.target.reset();
@@ -640,7 +637,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
     const date = e.target.permDate.value, permType = e.target.permType.value, reason = e.target.permReason.value.trim();
     if(!date){ toast('Selecciona la fecha.'); return; }
     if(!reason){ toast('Describe el motivo del permiso.'); return; }
-    const { error } = await supabase.rpc('submit_permission_request', { p_teacher_id:user.id, p_date:date, p_perm_type:permType, p_reason:reason });
+    const { error } = await supabase.rpc('submit_permission_request', { p_session: user.session,  p_teacher_id:user.id, p_date:date, p_perm_type:permType, p_reason:reason });
     if(error){ toast('No se pudo enviar. Intenta de nuevo.'); return; }
     toast('Solicitud de permiso enviada.');
     e.target.reset();
@@ -819,6 +816,7 @@ function TeacherApp({ user, onLogout, toast, Toast }){
         )}
         <p className="section-title">Cambiar mi PIN</p>
         <form className="form-card" onSubmit={changeOwnPin}>
+          <div className="field"><label>PIN actual</label><input name="oldPin" inputMode="numeric" maxLength={4} required /></div>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
           <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
           <button className="btn btn-primary" type="submit">Actualizar PIN</button>
@@ -928,10 +926,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   const reload = useCallback(async ()=>{
     const [r, t, p, s] = await Promise.all([
-      supabase.rpc('admin_list_requests'),
-      supabase.rpc('admin_list_teachers'),
-      supabase.rpc('admin_list_payroll'),
-      supabase.rpc('get_public_settings'),
+      supabase.rpc('admin_list_requests', { p_session: user.session }),
+      supabase.rpc('admin_list_teachers', { p_session: user.session }),
+      supabase.rpc('admin_list_payroll', { p_session: user.session }),
+      supabase.rpc('get_public_settings', { p_session: user.session }),
     ]);
     if(r.data) setRequests(r.data);
     if(t.data) setTeachers(t.data);
@@ -947,7 +945,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   },[]);
 
   const reloadCalendar = useCallback(async ()=>{
-    const { data } = await supabase.rpc('get_calendar_day', { p_date: calDate });
+    const { data } = await supabase.rpc('get_calendar_day', { p_session: user.session,  p_date: calDate });
     if(data) setCalEntries(data);
   },[calDate]);
 
@@ -955,20 +953,20 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   useEffect(()=>{
     if(view==='calendario' && showAttendance){
-      supabase.rpc('admin_list_attendance_day', { p_date: calDate }).then(({data})=>{ if(data) setAttendanceDay(data); });
+      supabase.rpc('admin_list_attendance_day', { p_session: user.session,  p_date: calDate }).then(({data})=>{ if(data) setAttendanceDay(data); });
     }
   },[view, calDate, showAttendance]);
 
   async function detectMyIp(){
-    const { data, error } = await supabase.rpc('get_my_ip');
+    const { data, error } = await supabase.rpc('get_my_ip', { p_session: user.session });
     if(error || !data){ toast('No se pudo detectar la IP.'); return; }
     setOfficeIp(data);
   }
 
   const reloadNinos = useCallback(async ()=>{
     const [f, i] = await Promise.all([
-      supabase.rpc('admin_list_families'),
-      supabase.rpc('admin_list_invoices'),
+      supabase.rpc('admin_list_families', { p_session: user.session }),
+      supabase.rpc('admin_list_invoices', { p_session: user.session }),
     ]);
     if(f.data) setFamilies(f.data);
     if(i.data) setInvoicesList(i.data);
@@ -983,7 +981,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const discount = Number(f.discount.value)||0;
     const override = f.override.value.trim() ? Number(f.override.value) : null;
     if(!tutorName || !emails){ toast('Completa el nombre del tutor y el correo.'); return; }
-    const { error } = await supabase.rpc('admin_save_family', {
+    const { error } = await supabase.rpc('admin_save_family', { p_session: user.session, 
       p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails,
       p_discount_percent: discount, p_total_override: override
     });
@@ -994,13 +992,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function toggleFamilyActive(id){
-    const { error } = await supabase.rpc('admin_toggle_family_active', { p_family_id:id });
+    const { error } = await supabase.rpc('admin_toggle_family_active', { p_session: user.session,  p_family_id:id });
     if(error){ toast('No se pudo guardar.'); return; }
     reloadNinos();
   }
 
   async function deleteFamily(id){
-    const { error } = await supabase.rpc('admin_delete_family', { p_family_id:id });
+    const { error } = await supabase.rpc('admin_delete_family', { p_session: user.session,  p_family_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
     toast('Familia eliminada.');
     reloadNinos();
@@ -1013,7 +1011,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const schedule = f.schedule.value.trim(), amount = Number(f.amount.value)||0;
     const teacherIds = familyItemForm.teacherIds || [];
     if(!childName || !program){ toast('Completa nombre del niño y programa.'); return; }
-    const { error } = await supabase.rpc('admin_save_family_item', {
+    const { error } = await supabase.rpc('admin_save_family_item', { p_session: user.session, 
       p_item_id: familyItemForm.id, p_family_id: familyId, p_child_name: childName,
       p_program: program, p_schedule: schedule, p_amount: amount, p_teacher_ids: teacherIds
     });
@@ -1031,13 +1029,13 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function deleteFamilyItem(id){
-    const { error } = await supabase.rpc('admin_delete_family_item', { p_item_id:id });
+    const { error } = await supabase.rpc('admin_delete_family_item', { p_session: user.session,  p_item_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
     reloadNinos();
   }
 
   async function toggleFamilyItemActive(id){
-    const { error } = await supabase.rpc('admin_toggle_family_item_active', { p_item_id:id });
+    const { error } = await supabase.rpc('admin_toggle_family_item_active', { p_session: user.session,  p_item_id:id });
     if(error){ toast('No se pudo guardar.'); return; }
     reloadNinos();
   }
@@ -1046,7 +1044,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     setSendingInvoiceFor(familyId);
     const { data, error } = await supabase.functions.invoke('send-invoice', {
       body: { family_id: familyId },
-      headers: { 'x-portal-secret': import.meta.env.VITE_PORTAL_SHARED_SECRET || '' },
+      headers: { 'x-session-token': user.session || '' },
     });
     setSendingInvoiceFor(null);
     if(error || !data){ toast('No se pudo enviar la factura.'); return; }
@@ -1056,11 +1054,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function markPaidAndSendReceipt(invoiceId){
-    const { data, error } = await supabase.rpc('admin_mark_invoice_paid', { p_invoice_id: invoiceId });
+    const { data, error } = await supabase.rpc('admin_mark_invoice_paid', { p_session: user.session,  p_invoice_id: invoiceId });
     const r = data && data[0];
     if(error || !r || !r.ok){ toast('No se pudo procesar.'); return; }
     const html = buildReceiptHtml(r);
-    const ok = await sendNotification(r.emails, `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html);
+    const ok = await sendNotification(user.session, r.emails, `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html);
     toast(ok ? 'Recibo enviado.' : 'Se marcó como pagada, pero el correo del recibo no se pudo enviar. Revisa el correo de la familia.');
     reloadNinos();
   }
@@ -1071,42 +1069,42 @@ function AdminApp({ user, onLogout, toast, Toast }){
       tutor_name: inv.tutor_name_snapshot, total: inv.total, payment_date: inv.payment_date,
       items_snapshot: inv.items_snapshot, billing_month: inv.billing_month
     });
-    const ok = await sendNotification(inv.emails_snapshot, `Recibo de Pago Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
+    const ok = await sendNotification(user.session, inv.emails_snapshot, `Recibo de Pago Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
     toast(ok ? 'Recibo reenviado.' : 'No se pudo enviar. Revisa el correo de la familia.');
   }
 
   async function sendReminder(inv){
     const html = buildReminderHtml(inv);
-    const ok = await sendNotification(inv.emails_snapshot, `Recordatorio de pago — Factura ${inv.invoice_number}`, html);
+    const ok = await sendNotification(user.session, inv.emails_snapshot, `Recordatorio de pago — Factura ${inv.invoice_number}`, html);
     if(!ok){ toast('No se pudo enviar el recordatorio. Revisa el correo de la familia.'); return; }
-    const { error } = await supabase.rpc('admin_mark_reminder_sent', { p_invoice_id: inv.id });
+    const { error } = await supabase.rpc('admin_mark_reminder_sent', { p_session: user.session,  p_invoice_id: inv.id });
     if(error){ toast('Se envió, pero no se pudo guardar la fecha.'); reloadNinos(); return; }
     toast('Recordatorio enviado.');
     reloadNinos();
   }
 
   async function saveOfficeIp(){
-    const { error } = await supabase.rpc('admin_set_office_ip', { p_ip: officeIp.trim() });
+    const { error } = await supabase.rpc('admin_set_office_ip', { p_session: user.session,  p_ip: officeIp.trim() });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('IP del centro guardada.');
   }
 
   async function saveAdminEmail(){
-    const { error } = await supabase.rpc('admin_set_recovery_email', { p_email: adminEmail.trim() });
+    const { error } = await supabase.rpc('admin_set_recovery_email', { p_session: user.session,  p_email: adminEmail.trim() });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Correo de recuperación guardado.');
   }
 
   async function toggleWorkLetterEnabled(){
     const next = !workLetterEnabled;
-    const { error } = await supabase.rpc('admin_set_work_letter_enabled', { p_enabled: next });
+    const { error } = await supabase.rpc('admin_set_work_letter_enabled', { p_session: user.session,  p_enabled: next });
     if(error){ toast('No se pudo guardar.'); return; }
     setWorkLetterEnabled(next);
     toast(next ? 'Carta laboral disponible para las maestras.' : 'Carta laboral oculta para las maestras.');
   }
 
   async function saveLetterSigner(){
-    const { error } = await supabase.rpc('admin_set_letter_signer', { p_name: letterSignerName.trim(), p_title: letterSignerTitle.trim() });
+    const { error } = await supabase.rpc('admin_set_letter_signer', { p_session: user.session,  p_name: letterSignerName.trim(), p_title: letterSignerTitle.trim() });
     if(error){ toast('No se pudo guardar.'); return; }
     toast('Firma guardada.');
   }
@@ -1120,7 +1118,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     let ok = false;
     try{
       const pdfBase64 = await buildWorkLetterPdfBase64(teacher, letterSignerName, letterSignerTitle);
-      ok = await sendNotification(teacher.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacher.name),
+      ok = await sendNotification(user.session, teacher.email, 'Carta laboral — Sensi SRL', buildLetterCoverHtml(teacher.name),
         [{ filename:'carta-laboral.pdf', content:pdfBase64, encoding:'base64', contentType:'application/pdf' }]);
     }catch(e){ console.error(e); }
     setLetterBusy(false);
@@ -1129,7 +1127,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   async function toggleVacationEnabled(){
     const next = !vacationEnabled;
-    const { error } = await supabase.rpc('admin_set_vacation_requests_enabled', { p_enabled: next });
+    const { error } = await supabase.rpc('admin_set_vacation_requests_enabled', { p_session: user.session,  p_enabled: next });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     setVacationEnabled(next);
     toast(next ? 'Vacaciones activadas para las maestras.' : 'Vacaciones ocultas para las maestras.');
@@ -1144,7 +1142,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
       // Editando una entrada existente: sigue siendo una sola maestra
       const teacherId = f.teacherId.value;
       if(!teacherId){ toast('Selecciona la maestra.'); return; }
-      const { error } = await supabase.rpc('admin_save_calendar_entry', {
+      const { error } = await supabase.rpc('admin_save_calendar_entry', { p_session: user.session, 
         p_entry_id: calForm.id, p_entry_date: calDate, p_teacher_id: teacherId,
         p_child_name: childName, p_horario: horario, p_notes: notes
       });
@@ -1159,7 +1157,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     if(!teacherIds.length){ toast('Selecciona al menos una maestra.'); return; }
     let ok=0, fail=0;
     for(const tid of teacherIds){
-      const { error } = await supabase.rpc('admin_save_calendar_entry', {
+      const { error } = await supabase.rpc('admin_save_calendar_entry', { p_session: user.session, 
         p_entry_id: null, p_entry_date: calDate, p_teacher_id: tid,
         p_child_name: childName, p_horario: horario, p_notes: notes
       });
@@ -1167,7 +1165,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
       ok++;
       const t = teachers.find(t=>t.id===tid);
       if(t?.email){
-        sendNotification(t.email, 'Nuevo evento en tu calendario',
+        sendNotification(user.session, t.email, 'Nuevo evento en tu calendario',
           `<p>Hola ${t.name},</p><p>Se agregó algo nuevo a tu calendario para el <strong>${fmtDate(calDate)}</strong>:</p>
            <p><strong>${childName}</strong>${horario?` · ${horario}`:''}</p>
            ${notes?`<p>${notes}</p>`:''}
@@ -1180,7 +1178,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function deleteCalEntry(id){
-    const { error } = await supabase.rpc('admin_delete_calendar_entry', { p_entry_id:id });
+    const { error } = await supabase.rpc('admin_delete_calendar_entry', { p_session: user.session,  p_entry_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
     reloadCalendar();
   }
@@ -1223,7 +1221,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     let ok=0, fail=0;
     for(const date of dates){
       for(const l of validLines){
-        const { error } = await supabase.rpc('admin_save_calendar_entry', {
+        const { error } = await supabase.rpc('admin_save_calendar_entry', { p_session: user.session, 
           p_entry_id: null, p_entry_date: date, p_teacher_id: l.teacher.id,
           p_child_name: l.childName, p_horario: l.horario, p_notes: ''
         });
@@ -1240,7 +1238,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     Object.values(byTeacher).forEach(({teacher, items})=>{
       if(!teacher.email) return;
       const rows = items.map(l=>`<li>${l.childName}${l.horario?` · ${l.horario}`:''}</li>`).join('');
-      sendNotification(teacher.email, 'Nuevo calendario asignado',
+      sendNotification(user.session, teacher.email, 'Nuevo calendario asignado',
         `<p>Hola ${teacher.name},</p><p>Se agregó a tu calendario, del <strong>${rango}</strong>:</p><ul>${rows}</ul><p>— Sensi Portal</p>`);
     });
     setCalBulkBusy(false);
@@ -1260,7 +1258,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
 
   async function reviewRequest(id, decision){
     const req = requests.find(r=>r.id===id);
-    const { error } = await supabase.rpc('admin_review_request', { p_request_id:id, p_decision:decision });
+    const { error } = await supabase.rpc('admin_review_request', { p_session: user.session,  p_request_id:id, p_decision:decision });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast(decision==='aprobado' ? 'Solicitud aprobada.' : 'Solicitud rechazada.');
     if(req){
@@ -1268,7 +1266,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
       const tipo = req.type==='vacacion' ? 'solicitud de vacaciones' : 'solicitud de permiso';
       const rango = req.type==='vacacion' ? `${fmtDate(req.start_date)} – ${fmtDate(req.end_date)}` : fmtDate(req.perm_date);
       const estado = decision==='aprobado' ? 'aprobada' : 'rechazada';
-      sendNotification(teacher?.email, `Tu ${tipo} fue ${estado}`,
+      sendNotification(user.session, teacher?.email, `Tu ${tipo} fue ${estado}`,
         `<p>Hola ${teacher?.name||''},</p><p>Tu ${tipo} para <strong>${rango}</strong> fue <strong>${estado}</strong>.</p><p>— Sensi Portal</p>`);
     }
     reload();
@@ -1282,7 +1280,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_session: user.session,  p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -1297,7 +1295,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     if(!name){ toast('Escribe el nombre.'); return; }
     if(pin && !/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1305,7 +1303,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function toggleActive(id){
-    const { error } = await supabase.rpc('admin_toggle_teacher_active', { p_teacher_id:id });
+    const { error } = await supabase.rpc('admin_toggle_teacher_active', { p_session: user.session,  p_teacher_id:id });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     reload();
   }
@@ -1318,7 +1316,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const calc = calcularDeduccionesRD(bruto, otras);
     const fechaPago = f.fechaPago.value, nota = f.nota.value.trim();
     if(!teacherId||!month){ toast('Selecciona maestra y mes.'); return; }
-    const { error } = await supabase.rpc('admin_save_payroll', {
+    const { error } = await supabase.rpc('admin_save_payroll', { p_session: user.session, 
       p_payroll_id: payrollForm.id || null, p_teacher_id:teacherId, p_month:month,
       p_bruto:bruto, p_afp:calc.afp, p_sfs:calc.sfs, p_isr:calc.isr, p_other_deductions:otras,
       p_neto:calc.neto, p_fecha_pago:fechaPago||null, p_nota:nota
@@ -1327,7 +1325,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
     toast('Nómina guardada.');
     setPayrollForm(null);
     const teacher = teachers.find(t=>t.id===teacherId);
-    sendNotification(teacher?.email, `Tu nómina de ${fmtMonth(month)} ya está disponible`,
+    sendNotification(user.session, teacher?.email, `Tu nómina de ${fmtMonth(month)} ya está disponible`,
       `<p>Hola ${teacher?.name||''},</p><p>Tu nómina de <strong>${fmtMonth(month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     reload();
   }
@@ -1355,14 +1353,14 @@ function AdminApp({ user, onLogout, toast, Toast }){
     for(const row of bulkPreview){
       if(!row.teacher || !row.bruto){ fail++; continue; }
       const nota = row.otras ? `Otras deducciones: ${fmtMoney(row.otras)}` : '';
-      const { error } = await supabase.rpc('admin_save_payroll', {
+      const { error } = await supabase.rpc('admin_save_payroll', { p_session: user.session, 
         p_payroll_id: null, p_teacher_id: row.teacher.id, p_month: bulkMonth,
         p_bruto: row.bruto, p_afp: row.calc.afp, p_sfs: row.calc.sfs, p_isr: row.calc.isr,
         p_other_deductions: row.otras, p_neto: row.calc.neto, p_fecha_pago: bulkFecha || null, p_nota: nota
       });
       if(error){ fail++; continue; }
       ok++;
-      sendNotification(row.teacher.email, `Tu nómina de ${fmtMonth(bulkMonth)} ya está disponible`,
+      sendNotification(user.session, row.teacher.email, `Tu nómina de ${fmtMonth(bulkMonth)} ya está disponible`,
         `<p>Hola ${row.teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(bulkMonth)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(row.calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
     }
     setBulkBusy(false);
@@ -1374,7 +1372,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function deletePayroll(id){
-    const { error } = await supabase.rpc('admin_delete_payroll', { p_payroll_id:id });
+    const { error } = await supabase.rpc('admin_delete_payroll', { p_session: user.session,  p_payroll_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
     reload();
   }
@@ -1382,11 +1380,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
   async function changeAdminPin(e){
     e.preventDefault();
     const f = e.target;
-    const p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
+    const oldPin = f.oldPin.value.trim(), p1 = f.newPin.value.trim(), p2 = f.confirmPin.value.trim();
     if(!/^\d{4}$/.test(p1)){ toast('El PIN debe ser de 4 dígitos.'); return; }
     if(p1!==p2){ toast('Los PIN no coinciden.'); return; }
-    const { error } = await supabase.rpc('admin_change_pin', { p_new_pin:p1 });
-    if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
+    const { data, error } = await supabase.rpc('admin_change_pin', { p_session:user.session, p_old_pin:oldPin, p_new_pin:p1 });
+    const r = data && data[0];
+    if(error || !r || !r.ok){ toast((r && r.message) || 'No se pudo guardar.'); return; }
     toast('PIN de administración actualizado.');
     f.reset();
   }
@@ -1915,6 +1914,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
         </div>
         <p className="section-title">Cambiar PIN de administración</p>
         <form className="form-card" onSubmit={changeAdminPin}>
+          <div className="field"><label>PIN actual</label><input name="oldPin" inputMode="numeric" maxLength={4} required /></div>
           <div className="field"><label>Nuevo PIN (4 dígitos)</label><input name="newPin" inputMode="numeric" maxLength={4} required /></div>
           <div className="field"><label>Confirmar PIN</label><input name="confirmPin" inputMode="numeric" maxLength={4} required /></div>
           <button className="btn btn-primary" type="submit">Actualizar PIN</button>
