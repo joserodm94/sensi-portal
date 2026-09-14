@@ -565,8 +565,20 @@ function TeacherApp({ user, onLogout, toast, Toast }){
   useEffect(()=>{ reload(); },[reload]);
 
   useEffect(()=>{
+    const id = setInterval(async ()=>{
+      const { data } = await supabase.rpc('verify_session', { p_session: user.session });
+      if(data === false){
+        toast('Tu sesión se cerró porque iniciaste sesión en otro dispositivo.');
+        onLogout();
+      }
+    }, 30000);
+    return ()=>clearInterval(id);
+  },[user.session]);
+
+
+  useEffect(()=>{
     if(view!=='calendario') return;
-    supabase.rpc('get_calendar_day', { p_session: user.session,  p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
+    supabase.rpc('get_calendar_day', { p_session: user.session, p_date: calDate }).then(({data})=>{ if(data) setCalEntries(data); });
   },[view, calDate]);
 
   useEffect(()=>{
@@ -1255,6 +1267,17 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const id = setInterval(reload, 20000);
     return ()=>clearInterval(id);
   },[reload]);
+
+  useEffect(()=>{
+    const id = setInterval(async ()=>{
+      const { data } = await supabase.rpc('verify_session', { p_session: user.session });
+      if(data === false){
+        toast('Tu sesión se cerró porque iniciaste sesión en otro dispositivo.');
+        onLogout();
+      }
+    }, 30000);
+    return ()=>clearInterval(id);
+  },[user.session]);
 
   async function reviewRequest(id, decision){
     const req = requests.find(r=>r.id===id);
