@@ -210,6 +210,70 @@ function buildReminderHtml(inv){
   </div>`;
 }
 
+function buildInvoiceEmailHtml(inv){
+  const items = inv.items_snapshot || [];
+  const billingLabel = fmtMonth(inv.billing_month);
+  const g = guessGenderEs(inv.tutor_name_snapshot);
+  const label = g==='f' ? 'MADRE/TUTORA' : 'PADRE/TUTOR';
+  const rows = items.map(it=>`
+    <tr>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px;">
+        ${it.child_name} - ${billingLabel}<br>
+        <span style="font-size:11px; color:#888888;">${it.schedule||''}</span>
+      </td>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px; text-align:center;">1 mes</td>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px; text-align:center;">${it.program}</td>
+      <td style="padding:10px 8px; border-bottom:1px solid #eee; font-size:14px; text-align:right;">${fmtNum(it.amount)}</td>
+    </tr>`).join('');
+  const totalsBlock = Number(inv.discount_amount)>0 ? `
+    <table width="100%" style="margin-top:10px;">
+      <tr><td style="text-align:right; font-size:12px; color:#2B2B2B; border-top:1px solid #bbb; padding-top:6px;" colspan="3">Subtotal (RD$):</td>
+          <td style="text-align:right; font-size:12px; color:#2B2B2B; border-top:1px solid #bbb; padding-top:6px;">${fmtMoney(inv.subtotal)}</td></tr>
+      <tr><td style="text-align:right; font-size:12px; color:#B23A48; padding-top:4px;" colspan="3">Descuento:</td>
+          <td style="text-align:right; font-size:12px; color:#B23A48; padding-top:4px;">-${fmtMoney(inv.discount_amount)}</td></tr>
+      <tr><td style="font-size:20px; font-weight:bold; color:#2B2B2B; padding-top:8px;" colspan="3">TOTAL A PAGAR (RD$)</td>
+          <td style="font-size:20px; font-weight:bold; color:#E58A32; text-align:right; padding-top:8px;">${fmtMoney(inv.total)}</td></tr>
+    </table>` : `
+    <table width="100%" style="margin-top:10px;">
+      <tr><td style="font-size:20px; font-weight:bold; color:#2B2B2B; border-top:1px solid #bbb; padding-top:10px;" colspan="3">TOTAL A PAGAR (RD$)</td>
+          <td style="font-size:20px; font-weight:bold; color:#E58A32; text-align:right; border-top:1px solid #bbb; padding-top:10px;">${fmtMoney(inv.total)}</td></tr>
+    </table>`;
+  return `
+  <div style="border:1px solid #999; padding:20px; font-family:Georgia,serif; max-width:600px;">
+    <table width="100%" style="border-collapse:collapse;"><tr>
+      <td style="vertical-align:top;">
+        <div style="font-weight:bold; color:#2B2B2B; font-size:16px;">Sensi SRL</div>
+        <div style="color:#6E6E6E; font-size:12px;">RNC: 1-3359263-2</div>
+        <div style="color:#6E6E6E; font-size:12px;">Santo Domingo, República Dominicana</div>
+        <div style="color:#6E6E6E; font-size:12px;">Tel: 829-686-7561</div>
+      </td>
+      <td style="vertical-align:top; text-align:right;">
+        <div style="font-size:28px; color:#2B2B2B;">FACTURA</div>
+        <div style="font-size:13px; color:#6E6E6E;">N°: <b style="color:#2B2B2B;">${inv.invoice_number}</b></div>
+        <div style="font-size:13px; color:#6E6E6E;">Fecha: <b style="color:#2B2B2B;">${fmtDate(inv.issue_date)}</b></div>
+        <div style="font-size:13px; color:#6E6E6E;">Vencimiento: <b style="color:#2B2B2B;">${fmtDate(inv.due_date)}</b></div>
+      </td>
+    </tr></table>
+    <hr style="border:none; border-top:1px solid #ddd; margin:16px 0;">
+    <div style="font-size:12px; color:#6E6E6E; font-weight:bold;">${label}</div>
+    <div style="font-size:14px; color:#2B2B2B;">${inv.tutor_name_snapshot}</div>
+    <table width="100%" style="border-collapse:collapse; margin-top:16px;">
+      <tr style="background:#DCE3EA;">
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B;">DESCRIPCIÓN</td>
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B; text-align:center;">CANTIDAD</td>
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B; text-align:center;">PROGRAMA</td>
+        <td style="padding:8px; font-size:12px; font-weight:bold; color:#2B2B2B; text-align:right;">IMPORTE (RD$)</td>
+      </tr>
+      ${rows}
+    </table>
+    ${totalsBlock}
+    <div style="margin-top:16px; font-size:13px; color:#2B2B2B;">
+      <b>Métodos de pago:</b> Transferencia bancaria — Banco BHD, cuenta de ahorros 12804400012, cédula 402-2267095-8
+    </div>
+    ${BRAND_STRIP_HTML}
+  </div>`;
+}
+
 function buildReceiptHtml(r){
   const items = r.items_snapshot || [];
   const rows = items.map(it=>`
@@ -1075,6 +1139,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reloadNinos();
   }
 
+  async function resendInvoice(inv){
+    const html = buildInvoiceEmailHtml(inv);
+    const ok = await sendNotification(user.session, inv.emails_snapshot, `Factura Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
+    toast(ok ? 'Factura reenviada.' : 'No se pudo enviar. Revisa el correo de la familia.');
+  }
+
   async function resendReceipt(inv){
     const html = buildReceiptHtml({
       receipt_number: inv.receipt_number, invoice_number: inv.invoice_number,
@@ -1806,10 +1876,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <span className={`badge badge-${inv.status==='pagada'?'aprobado':isOverdue?'rechazado':'pendiente'}`}>{inv.status==='pagada'?'Pagada':isOverdue?'Vencida':'Emitida'}</span>
               </div>
               {inv.status==='emitida' && (
-                <div className="li-actions">
-                  <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
-                  <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)}>Enviar recibo</button>
-                </div>
+                <>
+                  <div className="li-actions">
+                    <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
+                    <button className="btn btn-outline btn-sm" onClick={()=>resendInvoice(inv)}>Reenviar factura</button>
+                  </div>
+                  <div className="li-actions">
+                    <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)} style={{width:'100%'}}>Enviar recibo</button>
+                  </div>
+                </>
               )}
               {inv.status==='pagada' && (
                 <div className="li-actions">
