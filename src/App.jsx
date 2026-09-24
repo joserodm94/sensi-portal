@@ -182,6 +182,94 @@ async function buildWorkLetterPdfBase64(teacher, signerName, signerTitle){
   return dataUri.split(',')[1];
 }
 
+async function buildInvoicePdfDoc(inv){
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const marginX = 50, rightX = 562;
+  let y = 55;
+
+  try{
+    const logoDataUrl = await loadImageAsDataUrl(`${window.location.origin}/sensi-logo.png`);
+    doc.addImage(logoDataUrl, 'PNG', marginX, y, 40, 40);
+  }catch(e){ console.error('logo load failed', e); }
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(40);
+  doc.text('Sensi SRL', marginX+50, y+14);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110);
+  doc.text('RNC: 1-3359263-2', marginX+50, y+28);
+  doc.text('Santo Domingo, República Dominicana', marginX+50, y+40);
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(22); doc.setTextColor(40);
+  doc.text('FACTURA', rightX, y+18, { align:'right' });
+  doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(`N°: ${inv.invoice_number}`, rightX, y+32, { align:'right' });
+  doc.text(`Fecha: ${fmtDate(inv.issue_date)}`, rightX, y+44, { align:'right' });
+  doc.text(`Vencimiento: ${fmtDate(inv.due_date)}`, rightX, y+56, { align:'right' });
+
+  y += 75;
+  doc.setDrawColor(220); doc.line(marginX, y, rightX, y);
+  y += 20;
+
+  const g = guessGenderEs(inv.tutor_name_snapshot);
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(g==='f' ? 'MADRE/TUTORA' : 'PADRE/TUTOR', marginX, y);
+  y += 14;
+  doc.setFont('helvetica','normal'); doc.setFontSize(12); doc.setTextColor(40);
+  doc.text(inv.tutor_name_snapshot, marginX, y);
+  y += 20;
+
+  // Encabezado de tabla
+  doc.setFillColor(220,227,234);
+  doc.rect(marginX, y, rightX-marginX, 20, 'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(40);
+  doc.text('DESCRIPCIÓN', marginX+6, y+13);
+  doc.text('PROGRAMA', 400, y+13, { align:'center' });
+  doc.text('IMPORTE (RD$)', rightX-6, y+13, { align:'right' });
+  y += 20;
+
+  doc.setFont('helvetica','normal');
+  const items = inv.items_snapshot || [];
+  const billingLabel = fmtMonth(inv.billing_month);
+  items.forEach(it=>{
+    const rowTop = y;
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(`${it.child_name} - ${billingLabel}`, marginX+6, y+14);
+    doc.setFontSize(8.5); doc.setTextColor(140);
+    doc.text(it.schedule||'', marginX+6, y+27);
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(it.program||'', 400, y+14, { align:'center' });
+    doc.text(fmtMoney(it.amount), rightX-6, y+14, { align:'right' });
+    y += 38;
+    doc.setDrawColor(235); doc.line(marginX, y-6, rightX, y-6);
+  });
+
+  y += 6;
+  if(Number(inv.discount_amount)>0){
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80);
+    doc.text('Subtotal (RD$):', 400, y, { align:'right' }); doc.text(fmtMoney(inv.subtotal), rightX-6, y, { align:'right' }); y+=14;
+    doc.setTextColor(178,58,72);
+    doc.text('Descuento:', 400, y, { align:'right' }); doc.text('-'+fmtMoney(inv.discount_amount), rightX-6, y, { align:'right' }); y+=16;
+  }
+  doc.setDrawColor(180); doc.line(marginX, y, rightX, y); y += 18;
+  doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(40);
+  doc.text('TOTAL A PAGAR (RD$)', marginX, y);
+  doc.setTextColor(229,138,50);
+  doc.text('RD$ ' + fmtMoney(inv.total), rightX-6, y, { align:'right' });
+
+  y += 30;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(40);
+  const payLines = doc.splitTextToSize('Métodos de pago: Transferencia bancaria — Banco BHD, cuenta de ahorros 12804400012, cédula 402-2267095-8', rightX-marginX);
+  doc.text(payLines, marginX, y);
+
+  const colors = [[210,86,79],[229,138,50],[234,177,59],[166,197,72],[74,147,201]];
+  const stripW = (rightX-marginX)/colors.length;
+  colors.forEach((c,i)=>{
+    doc.setFillColor(c[0], c[1], c[2]);
+    doc.rect(marginX + i*stripW, 750, stripW, 5, 'F');
+  });
+
+  return doc;
+}
+
 function buildReminderHtml(inv){
   const items = inv.items_snapshot || [];
   const rows = items.map(it=>`
@@ -1054,11 +1142,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const tutorName = f.tutorName.value.trim(), emails = f.emails.value.trim();
+    const whatsapp = f.whatsapp.value.trim();
     const discount = Number(f.discount.value)||0;
     const override = f.override.value.trim() ? Number(f.override.value) : null;
     if(!tutorName || !emails){ toast('Completa el nombre del tutor y el correo.'); return; }
     const { error } = await supabase.rpc('admin_save_family', { p_session: user.session, 
-      p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails,
+      p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails, p_whatsapp: whatsapp||null,
       p_discount_percent: discount, p_total_override: override
     });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
@@ -1137,6 +1226,20 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const ok = await sendNotification(user.session, r.emails, `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html);
     toast(ok ? 'Recibo enviado.' : 'Se marcó como pagada, pero el correo del recibo no se pudo enviar. Revisa el correo de la familia.');
     reloadNinos();
+  }
+
+  async function sendInvoiceWhatsApp(inv){
+    const fam = families.find(f=>f.id===inv.family_id);
+    if(!fam || !fam.whatsapp){ toast('Esta familia no tiene WhatsApp registrado. Agrégalo en Niños.'); return; }
+    let digits = fam.whatsapp.replace(/\D/g,'');
+    if(digits.length===10) digits = '1'+digits;
+    try{
+      const doc = await buildInvoicePdfDoc(inv);
+      doc.save(`factura-${inv.invoice_number}.pdf`);
+    }catch(e){ console.error(e); toast('No se pudo generar el PDF.'); return; }
+    const msg = encodeURIComponent(`Hola ${inv.tutor_name_snapshot}, te compartimos tu factura de Sensi SRL (${inv.invoice_number}) por ${fmtMoney(inv.total)}. Adjunto el PDF que se acaba de descargar.`);
+    window.open(`https://wa.me/${digits}?text=${msg}`, '_blank');
+    toast('PDF descargado. Adjúntalo en el chat de WhatsApp que se abrió.');
   }
 
   async function resendInvoice(inv){
@@ -1877,9 +1980,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
               </div>
               {inv.status==='emitida' && (
                 <>
-                  <div className="li-actions">
+                  <div className="li-actions" style={{flexWrap:'wrap'}}>
                     <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
                     <button className="btn btn-outline btn-sm" onClick={()=>resendInvoice(inv)}>Reenviar factura</button>
+                    {families.find(f=>f.id===inv.family_id)?.whatsapp && (
+                      <button className="btn btn-outline btn-sm" onClick={()=>sendInvoiceWhatsApp(inv)}>WhatsApp</button>
+                    )}
                   </div>
                   <div className="li-actions">
                     <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)} style={{width:'100%'}}>Enviar recibo</button>
@@ -1902,6 +2008,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <form className="form-card" style={{marginBottom:14}} onSubmit={saveFamily}>
                 <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" placeholder="Ej. Maria Alejandra Segura" required /></div>
                 <div className="field"><label>Correo(s) — separados por coma si son varios</label><input name="emails" placeholder="correo@ejemplo.com" required /></div>
+                <div className="field"><label>WhatsApp (opcional)</label><input name="whatsapp" type="tel" placeholder="Ej. 8091234567" /></div>
                 <div className="two-col">
                   <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue="0" /></div>
                   <div className="field"><label>Monto fijo total (opcional)</label><input name="override" type="number" step="0.01" placeholder="Deja vacío si no aplica" /></div>
@@ -1918,6 +2025,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <form key={fam.id} className="form-card" style={{marginBottom:10}} onSubmit={saveFamily}>
                   <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" defaultValue={fam.tutor_name} required /></div>
                   <div className="field"><label>Correo(s)</label><input name="emails" defaultValue={fam.emails} required /></div>
+                  <div className="field"><label>WhatsApp (opcional)</label><input name="whatsapp" type="tel" defaultValue={fam.whatsapp||''} placeholder="Ej. 8091234567" /></div>
                   <div className="two-col">
                     <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue={fam.discount_percent||0} /></div>
                     <div className="field"><label>Monto fijo total</label><input name="override" type="number" step="0.01" defaultValue={fam.total_override||''} /></div>
