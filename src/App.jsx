@@ -1228,18 +1228,30 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reloadNinos();
   }
 
-  async function sendInvoiceWhatsApp(inv){
+  async function viewInvoicePdf(inv){
+    // Abre una pestaña en blanco YA (antes de generar el PDF, que es async) para
+    // que el navegador no la bloquee por no venir "directo" de un clic.
+    const tab = window.open('', '_blank');
+    try{
+      const doc = await buildInvoicePdfDoc(inv);
+      const blobUrl = doc.output('bloburl');
+      if(tab) tab.location.href = blobUrl;
+      else window.open(blobUrl, '_blank');
+      toast('Usa el ícono de compartir/guardar de tu celular para descargarlo.');
+    }catch(e){
+      console.error(e);
+      if(tab) tab.close();
+      toast('No se pudo generar el PDF.');
+    }
+  }
+
+  function openInvoiceWhatsApp(inv){
     const fam = families.find(f=>f.id===inv.family_id);
     if(!fam || !fam.whatsapp){ toast('Esta familia no tiene WhatsApp registrado. Agrégalo en Niños.'); return; }
     let digits = fam.whatsapp.replace(/\D/g,'');
     if(digits.length===10) digits = '1'+digits;
-    try{
-      const doc = await buildInvoicePdfDoc(inv);
-      doc.save(`factura-${inv.invoice_number}.pdf`);
-    }catch(e){ console.error(e); toast('No se pudo generar el PDF.'); return; }
-    const msg = encodeURIComponent(`Hola ${inv.tutor_name_snapshot}, te compartimos tu factura de Sensi SRL (${inv.invoice_number}) por ${fmtMoney(inv.total)}. Adjunto el PDF que se acaba de descargar.`);
+    const msg = encodeURIComponent(`Hola ${inv.tutor_name_snapshot}, te compartimos tu factura de Sensi SRL (${inv.invoice_number}) por ${fmtMoney(inv.total)}. Adjunta el PDF que descargaste.`);
     window.open(`https://wa.me/${digits}?text=${msg}`, '_blank');
-    toast('PDF descargado. Adjúntalo en el chat de WhatsApp que se abrió.');
   }
 
   async function resendInvoice(inv){
@@ -1984,7 +1996,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
                     <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
                     <button className="btn btn-outline btn-sm" onClick={()=>resendInvoice(inv)}>Reenviar factura</button>
                     {families.find(f=>f.id===inv.family_id)?.whatsapp && (
-                      <button className="btn btn-outline btn-sm" onClick={()=>sendInvoiceWhatsApp(inv)}>WhatsApp</button>
+                      <>
+                        <button className="btn btn-outline btn-sm" onClick={()=>viewInvoicePdf(inv)}>Ver/guardar PDF</button>
+                        <button className="btn btn-outline btn-sm" onClick={()=>openInvoiceWhatsApp(inv)}>Abrir WhatsApp</button>
+                      </>
                     )}
                   </div>
                   <div className="li-actions">
