@@ -182,6 +182,94 @@ async function buildWorkLetterPdfBase64(teacher, signerName, signerTitle){
   return dataUri.split(',')[1];
 }
 
+async function buildInvoicePdfDoc(inv){
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const marginX = 50, rightX = 562;
+  let y = 55;
+
+  try{
+    const logoDataUrl = await loadImageAsDataUrl(`${window.location.origin}/sensi-logo.png`);
+    doc.addImage(logoDataUrl, 'PNG', marginX, y, 40, 40);
+  }catch(e){ console.error('logo load failed', e); }
+
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(40);
+  doc.text('Sensi SRL', marginX+50, y+14);
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110);
+  doc.text('RNC: 1-3359263-2', marginX+50, y+28);
+  doc.text('Santo Domingo, República Dominicana', marginX+50, y+40);
+
+  doc.setFont('helvetica','normal'); doc.setFontSize(22); doc.setTextColor(40);
+  doc.text('FACTURA', rightX, y+18, { align:'right' });
+  doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(`N°: ${inv.invoice_number}`, rightX, y+32, { align:'right' });
+  doc.text(`Fecha: ${fmtDate(inv.issue_date)}`, rightX, y+44, { align:'right' });
+  doc.text(`Vencimiento: ${fmtDate(inv.due_date)}`, rightX, y+56, { align:'right' });
+
+  y += 75;
+  doc.setDrawColor(220); doc.line(marginX, y, rightX, y);
+  y += 20;
+
+  const g = guessGenderEs(inv.tutor_name_snapshot);
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(110);
+  doc.text(g==='f' ? 'MADRE/TUTORA' : 'PADRE/TUTOR', marginX, y);
+  y += 14;
+  doc.setFont('helvetica','normal'); doc.setFontSize(12); doc.setTextColor(40);
+  doc.text(inv.tutor_name_snapshot, marginX, y);
+  y += 20;
+
+  // Encabezado de tabla
+  doc.setFillColor(220,227,234);
+  doc.rect(marginX, y, rightX-marginX, 20, 'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(40);
+  doc.text('DESCRIPCIÓN', marginX+6, y+13);
+  doc.text('PROGRAMA', 400, y+13, { align:'center' });
+  doc.text('IMPORTE (RD$)', rightX-6, y+13, { align:'right' });
+  y += 20;
+
+  doc.setFont('helvetica','normal');
+  const items = inv.items_snapshot || [];
+  const billingLabel = fmtMonth(inv.billing_month);
+  items.forEach(it=>{
+    const rowTop = y;
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(`${it.child_name} - ${billingLabel}`, marginX+6, y+14);
+    doc.setFontSize(8.5); doc.setTextColor(140);
+    doc.text(it.schedule||'', marginX+6, y+27);
+    doc.setFontSize(10); doc.setTextColor(40);
+    doc.text(it.program||'', 400, y+14, { align:'center' });
+    doc.text(fmtMoney(it.amount), rightX-6, y+14, { align:'right' });
+    y += 38;
+    doc.setDrawColor(235); doc.line(marginX, y-6, rightX, y-6);
+  });
+
+  y += 6;
+  if(Number(inv.discount_amount)>0){
+    doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(80);
+    doc.text('Subtotal (RD$):', 400, y, { align:'right' }); doc.text(fmtMoney(inv.subtotal), rightX-6, y, { align:'right' }); y+=14;
+    doc.setTextColor(178,58,72);
+    doc.text('Descuento:', 400, y, { align:'right' }); doc.text('-'+fmtMoney(inv.discount_amount), rightX-6, y, { align:'right' }); y+=16;
+  }
+  doc.setDrawColor(180); doc.line(marginX, y, rightX, y); y += 18;
+  doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(40);
+  doc.text('TOTAL A PAGAR (RD$)', marginX, y);
+  doc.setTextColor(229,138,50);
+  doc.text('RD$ ' + fmtMoney(inv.total), rightX-6, y, { align:'right' });
+
+  y += 30;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(40);
+  const payLines = doc.splitTextToSize('Métodos de pago: Transferencia bancaria — Banco BHD, cuenta de ahorros 12804400012, cédula 402-2267095-8', rightX-marginX);
+  doc.text(payLines, marginX, y);
+
+  const colors = [[210,86,79],[229,138,50],[234,177,59],[166,197,72],[74,147,201]];
+  const stripW = (rightX-marginX)/colors.length;
+  colors.forEach((c,i)=>{
+    doc.setFillColor(c[0], c[1], c[2]);
+    doc.rect(marginX + i*stripW, 750, stripW, 5, 'F');
+  });
+
+  return doc;
+}
+
 function buildReminderHtml(inv){
   const items = inv.items_snapshot || [];
   const rows = items.map(it=>`
@@ -970,6 +1058,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [bulkFecha, setBulkFecha] = useState(todayStr());
   const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows before saving
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [multiOpen, setMultiOpen] = useState(false);
+  const [multiTeacherIds, setMultiTeacherIds] = useState([]);
+  const [multiMonth, setMultiMonth] = useState(new Date().toISOString().slice(0,7));
+  const [multiFecha, setMultiFecha] = useState(todayStr());
+  const [multiBusy, setMultiBusy] = useState(false);
   const [vacationEnabled, setVacationEnabled] = useState(false);
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
@@ -1054,11 +1147,12 @@ function AdminApp({ user, onLogout, toast, Toast }){
     e.preventDefault();
     const f = e.target;
     const tutorName = f.tutorName.value.trim(), emails = f.emails.value.trim();
+    const whatsapp = f.whatsapp.value.trim();
     const discount = Number(f.discount.value)||0;
     const override = f.override.value.trim() ? Number(f.override.value) : null;
     if(!tutorName || !emails){ toast('Completa el nombre del tutor y el correo.'); return; }
     const { error } = await supabase.rpc('admin_save_family', { p_session: user.session, 
-      p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails,
+      p_family_id: editingFamilyId, p_tutor_name: tutorName, p_emails: emails, p_whatsapp: whatsapp||null,
       p_discount_percent: discount, p_total_override: override
     });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
@@ -1137,6 +1231,32 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const ok = await sendNotification(user.session, r.emails, `Recibo de Pago Sensi SRL - ${fmtMonth(r.billing_month)}`, html);
     toast(ok ? 'Recibo enviado.' : 'Se marcó como pagada, pero el correo del recibo no se pudo enviar. Revisa el correo de la familia.');
     reloadNinos();
+  }
+
+  async function viewInvoicePdf(inv){
+    // Abre una pestaña en blanco YA (antes de generar el PDF, que es async) para
+    // que el navegador no la bloquee por no venir "directo" de un clic.
+    const tab = window.open('', '_blank');
+    try{
+      const doc = await buildInvoicePdfDoc(inv);
+      const blobUrl = doc.output('bloburl');
+      if(tab) tab.location.href = blobUrl;
+      else window.open(blobUrl, '_blank');
+      toast('Usa el ícono de Compartir (no "Copiar enlace") para guardarlo o adjuntarlo.');
+    }catch(e){
+      console.error(e);
+      if(tab) tab.close();
+      toast('No se pudo generar el PDF.');
+    }
+  }
+
+  function openInvoiceWhatsApp(inv){
+    const fam = families.find(f=>f.id===inv.family_id);
+    if(!fam || !fam.whatsapp){ toast('Esta familia no tiene WhatsApp registrado. Agrégalo en Niños.'); return; }
+    let digits = fam.whatsapp.replace(/\D/g,'');
+    if(digits.length===10) digits = '1'+digits;
+    const msg = encodeURIComponent(`Hola ${inv.tutor_name_snapshot}, te compartimos tu factura de Sensi SRL (${inv.invoice_number}) por ${fmtMoney(inv.total)}.`);
+    window.open(`https://wa.me/${digits}?text=${msg}`, '_blank');
   }
 
   async function resendInvoice(inv){
@@ -1371,9 +1491,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const name = f.name.value.trim(), pin = f.pin.value.trim(), vac = Number(f.vacDays.value)||DEFAULT_VACATION_DAYS;
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
+    const ss = f.socialSecurity.checked;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_session: user.session,  p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_session: user.session,  p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -1386,9 +1507,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const name=f.name.value.trim(), pin=f.pin.value.trim(), vac=Number(f.vacDays.value), used=Number(f.vacUsed.value);
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
+    const ss = f.socialSecurity.checked;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(pin && !/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1461,6 +1583,33 @@ function AdminApp({ user, onLogout, toast, Toast }){
     setBulkPreview(null);
     setBulkText('');
     setBulkOpen(false);
+    reload();
+  }
+
+  async function saveMultiPayroll(){
+    const selected = teachers.filter(t=>multiTeacherIds.includes(t.id) && t.monthly_salary);
+    if(!selected.length){ toast('Selecciona al menos una maestra con sueldo guardado.'); return; }
+    setMultiBusy(true);
+    let ok=0, fail=0;
+    for(const teacher of selected){
+      const bruto = Number(teacher.monthly_salary)||0;
+      const calc = teacher.social_security_enrolled===false
+        ? { afp:0, sfs:0, isr:0, otras:0, deducciones:0, neto:bruto }
+        : calcularDeduccionesRD(bruto, 0);
+      const { error } = await supabase.rpc('admin_save_payroll', { p_session: user.session,
+        p_payroll_id: null, p_teacher_id: teacher.id, p_month: multiMonth,
+        p_bruto: bruto, p_afp: calc.afp, p_sfs: calc.sfs, p_isr: calc.isr,
+        p_other_deductions: 0, p_neto: calc.neto, p_fecha_pago: multiFecha||null, p_nota: ''
+      });
+      if(error){ fail++; continue; }
+      ok++;
+      sendNotification(user.session, teacher.email, `Tu nómina de ${fmtMonth(multiMonth)} ya está disponible`,
+        `<p>Hola ${teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(multiMonth)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
+    }
+    setMultiBusy(false);
+    toast(fail ? `${ok} enviadas, ${fail} con error (ya existía nómina de ese mes para esa maestra).` : `${ok} nóminas enviadas.`);
+    setMultiTeacherIds([]);
+    setMultiOpen(false);
     reload();
   }
 
@@ -1559,6 +1708,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" /></div>
             </div>
             <div className="field"><label>Horario laboral</label><input name="workSchedule" placeholder="Ej. Lunes a Viernes AM y PM" /></div>
+            <label className="field" style={{display:'flex', alignItems:'center', gap:8, flexDirection:'row'}}>
+              <input name="socialSecurity" type="checkbox" defaultChecked={true} style={{width:'auto'}} />
+              <span>Está en TSS y AFP (se le calculan las deducciones)</span>
+            </label>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>setAddingTeacher(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary">Guardar maestra</button>
@@ -1581,6 +1734,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" defaultValue={t.hire_date||''} /></div>
               </div>
               <div className="field"><label>Horario laboral</label><input name="workSchedule" defaultValue={t.work_schedule||''} placeholder="Ej. Lunes a Viernes AM y PM" /></div>
+              <label className="field" style={{display:'flex', alignItems:'center', gap:8, flexDirection:'row'}}>
+                <input name="socialSecurity" type="checkbox" defaultChecked={t.social_security_enrolled!==false} style={{width:'auto'}} />
+                <span>Está en TSS y AFP (se le calculan las deducciones)</span>
+              </label>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -1597,6 +1754,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                   <p className="teacher-meta">{disponibles} de {t.vacation_days_total||0} días disponibles {t.active?'':'· inactiva'}</p>
                   {t.work_schedule && <p className="teacher-meta">{t.work_schedule}</p>}
                   {t.cedula && <p className="teacher-meta">Cédula {t.cedula}</p>}
+                  <p className="teacher-meta">{t.social_security_enrolled!==false ? 'Con TSS/AFP' : 'Sin TSS/AFP'}</p>
                   <p className="teacher-meta">
                     {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
                     {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
@@ -1621,14 +1779,44 @@ function AdminApp({ user, onLogout, toast, Toast }){
       <>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14, gap:8}}>
           <p className="section-title" style={{margin:0}}>Registros de nómina</p>
-          {!f && !bulkOpen && (
-            <div style={{display:'flex',gap:8}}>
+          {!f && !bulkOpen && !multiOpen && (
+            <div style={{display:'flex',gap:8, flexWrap:'wrap'}}>
+              <button className="btn btn-outline btn-sm" onClick={()=>setMultiOpen(true)}>Seleccionar maestras</button>
               <button className="btn btn-outline btn-sm" onClick={()=>{setBulkOpen(true); setBulkPreview(null);}}>Carga masiva</button>
               <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', otras:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
             </div>
           )}
         </div>
-        {!f && !bulkOpen && payroll.length>0 && (
+        {multiOpen && (
+          <div className="form-card" style={{marginBottom:16}}>
+            <p className="hint" style={{marginBottom:10}}>Selecciona las maestras a las que quieres enviar nómina este mes. Se usa el sueldo que ya tienen guardado en Maestras, y las deducciones se calculan según si tienen TSS/AFP activado o no.</p>
+            <div className="two-col">
+              <div className="field"><label>Mes</label><input type="month" value={multiMonth} onChange={e=>setMultiMonth(e.target.value)} /></div>
+              <div className="field"><label>Fecha de pago</label><input type="date" value={multiFecha} onChange={e=>setMultiFecha(e.target.value)} /></div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <label style={{marginBottom:0}}>Maestras (con sueldo guardado)</label>
+              <button type="button" className="link-btn" style={{marginTop:0}} onClick={()=>{
+                const withSalary = teachers.filter(t=>t.monthly_salary).map(t=>t.id);
+                setMultiTeacherIds(multiTeacherIds.length===withSalary.length ? [] : withSalary);
+              }}>{multiTeacherIds.length===teachers.filter(t=>t.monthly_salary).length ? 'Ninguna' : 'Todas'}</button>
+            </div>
+            <div className="chip-row" style={{marginBottom:14}}>
+              {teachers.filter(t=>t.monthly_salary).map(t=>(
+                <button key={t.id} type="button" className={`chip${multiTeacherIds.includes(t.id)?' active':''}`}
+                  onClick={()=>setMultiTeacherIds(prev=>prev.includes(t.id) ? prev.filter(x=>x!==t.id) : [...prev, t.id])}>
+                  {t.name} · {fmtMoney(t.monthly_salary)}
+                </button>
+              ))}
+              {!teachers.filter(t=>t.monthly_salary).length && <p className="hint">Ninguna maestra tiene sueldo guardado todavía — agrégalo en Maestras.</p>}
+            </div>
+            <div className="li-actions">
+              <button type="button" className="btn btn-ghost" onClick={()=>{setMultiOpen(false); setMultiTeacherIds([]);}}>Cancelar</button>
+              <button type="button" className="btn btn-primary" disabled={multiBusy || !multiTeacherIds.length} onClick={saveMultiPayroll}>{multiBusy?'Enviando…':`Enviar nómina (${multiTeacherIds.length})`}</button>
+            </div>
+          </div>
+        )}
+        {!f && !bulkOpen && !multiOpen && payroll.length>0 && (
           <div className="export-row">
             <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
             <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
@@ -1877,9 +2065,15 @@ function AdminApp({ user, onLogout, toast, Toast }){
               </div>
               {inv.status==='emitida' && (
                 <>
-                  <div className="li-actions">
+                  <div className="li-actions" style={{flexWrap:'wrap'}}>
                     <button className="btn btn-outline btn-sm" onClick={()=>sendReminder(inv)}>Recordatorio</button>
                     <button className="btn btn-outline btn-sm" onClick={()=>resendInvoice(inv)}>Reenviar factura</button>
+                    {families.find(f=>f.id===inv.family_id)?.whatsapp && (
+                      <>
+                        <button className="btn btn-outline btn-sm" onClick={()=>viewInvoicePdf(inv)}>Ver/guardar PDF</button>
+                        <button className="btn btn-outline btn-sm" onClick={()=>openInvoiceWhatsApp(inv)}>Abrir WhatsApp</button>
+                      </>
+                    )}
                   </div>
                   <div className="li-actions">
                     <button className="btn btn-primary btn-sm" onClick={()=>markPaidAndSendReceipt(inv.id)} style={{width:'100%'}}>Enviar recibo</button>
@@ -1902,6 +2096,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <form className="form-card" style={{marginBottom:14}} onSubmit={saveFamily}>
                 <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" placeholder="Ej. Maria Alejandra Segura" required /></div>
                 <div className="field"><label>Correo(s) — separados por coma si son varios</label><input name="emails" placeholder="correo@ejemplo.com" required /></div>
+                <div className="field"><label>WhatsApp (opcional)</label><input name="whatsapp" type="tel" placeholder="Ej. 8091234567" /></div>
                 <div className="two-col">
                   <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue="0" /></div>
                   <div className="field"><label>Monto fijo total (opcional)</label><input name="override" type="number" step="0.01" placeholder="Deja vacío si no aplica" /></div>
@@ -1918,6 +2113,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <form key={fam.id} className="form-card" style={{marginBottom:10}} onSubmit={saveFamily}>
                   <div className="field"><label>Nombre del tutor/madre</label><input name="tutorName" defaultValue={fam.tutor_name} required /></div>
                   <div className="field"><label>Correo(s)</label><input name="emails" defaultValue={fam.emails} required /></div>
+                  <div className="field"><label>WhatsApp (opcional)</label><input name="whatsapp" type="tel" defaultValue={fam.whatsapp||''} placeholder="Ej. 8091234567" /></div>
                   <div className="two-col">
                     <div className="field"><label>Descuento (%)</label><input name="discount" type="number" step="0.01" defaultValue={fam.discount_percent||0} /></div>
                     <div className="field"><label>Monto fijo total</label><input name="override" type="number" step="0.01" defaultValue={fam.total_override||''} /></div>
