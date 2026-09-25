@@ -970,6 +970,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
   const [bulkFecha, setBulkFecha] = useState(todayStr());
   const [bulkPreview, setBulkPreview] = useState(null); // array of parsed rows before saving
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [multiOpen, setMultiOpen] = useState(false);
+  const [multiTeacherIds, setMultiTeacherIds] = useState([]);
+  const [multiMonth, setMultiMonth] = useState(new Date().toISOString().slice(0,7));
+  const [multiFecha, setMultiFecha] = useState(todayStr());
+  const [multiBusy, setMultiBusy] = useState(false);
   const [vacationEnabled, setVacationEnabled] = useState(false);
   const [calDate, setCalDate] = useState(todayStr());
   const [calEntries, setCalEntries] = useState([]);
@@ -1371,9 +1376,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const name = f.name.value.trim(), pin = f.pin.value.trim(), vac = Number(f.vacDays.value)||DEFAULT_VACATION_DAYS;
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
+    const ss = f.socialSecurity.checked;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(!/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_add_teacher', { p_session: user.session,  p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_add_teacher', { p_session: user.session,  p_name:name, p_pin:pin, p_vacation_days_total:vac, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Maestra agregada.');
     setAddingTeacher(false);
@@ -1386,9 +1392,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const name=f.name.value.trim(), pin=f.pin.value.trim(), vac=Number(f.vacDays.value), used=Number(f.vacUsed.value);
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
+    const ss = f.socialSecurity.checked;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(pin && !/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1461,6 +1468,33 @@ function AdminApp({ user, onLogout, toast, Toast }){
     setBulkPreview(null);
     setBulkText('');
     setBulkOpen(false);
+    reload();
+  }
+
+  async function saveMultiPayroll(){
+    const selected = teachers.filter(t=>multiTeacherIds.includes(t.id) && t.monthly_salary);
+    if(!selected.length){ toast('Selecciona al menos una maestra con sueldo guardado.'); return; }
+    setMultiBusy(true);
+    let ok=0, fail=0;
+    for(const teacher of selected){
+      const bruto = Number(teacher.monthly_salary)||0;
+      const calc = teacher.social_security_enrolled===false
+        ? { afp:0, sfs:0, isr:0, otras:0, deducciones:0, neto:bruto }
+        : calcularDeduccionesRD(bruto, 0);
+      const { error } = await supabase.rpc('admin_save_payroll', { p_session: user.session,
+        p_payroll_id: null, p_teacher_id: teacher.id, p_month: multiMonth,
+        p_bruto: bruto, p_afp: calc.afp, p_sfs: calc.sfs, p_isr: calc.isr,
+        p_other_deductions: 0, p_neto: calc.neto, p_fecha_pago: multiFecha||null, p_nota: ''
+      });
+      if(error){ fail++; continue; }
+      ok++;
+      sendNotification(user.session, teacher.email, `Tu nómina de ${fmtMonth(multiMonth)} ya está disponible`,
+        `<p>Hola ${teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(multiMonth)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(calc.neto)}</strong>.</p><p>— Sensi Portal</p>`);
+    }
+    setMultiBusy(false);
+    toast(fail ? `${ok} enviadas, ${fail} con error (ya existía nómina de ese mes para esa maestra).` : `${ok} nóminas enviadas.`);
+    setMultiTeacherIds([]);
+    setMultiOpen(false);
     reload();
   }
 
@@ -1559,6 +1593,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" /></div>
             </div>
             <div className="field"><label>Horario laboral</label><input name="workSchedule" placeholder="Ej. Lunes a Viernes AM y PM" /></div>
+            <label className="field" style={{display:'flex', alignItems:'center', gap:8, flexDirection:'row'}}>
+              <input name="socialSecurity" type="checkbox" defaultChecked={true} style={{width:'auto'}} />
+              <span>Está en TSS y AFP (se le calculan las deducciones)</span>
+            </label>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>setAddingTeacher(false)}>Cancelar</button>
               <button type="submit" className="btn btn-primary">Guardar maestra</button>
@@ -1581,6 +1619,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <div className="field"><label>Fecha de entrada</label><input name="hireDate" type="date" defaultValue={t.hire_date||''} /></div>
               </div>
               <div className="field"><label>Horario laboral</label><input name="workSchedule" defaultValue={t.work_schedule||''} placeholder="Ej. Lunes a Viernes AM y PM" /></div>
+              <label className="field" style={{display:'flex', alignItems:'center', gap:8, flexDirection:'row'}}>
+                <input name="socialSecurity" type="checkbox" defaultChecked={t.social_security_enrolled!==false} style={{width:'auto'}} />
+                <span>Está en TSS y AFP (se le calculan las deducciones)</span>
+              </label>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -1597,6 +1639,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                   <p className="teacher-meta">{disponibles} de {t.vacation_days_total||0} días disponibles {t.active?'':'· inactiva'}</p>
                   {t.work_schedule && <p className="teacher-meta">{t.work_schedule}</p>}
                   {t.cedula && <p className="teacher-meta">Cédula {t.cedula}</p>}
+                  <p className="teacher-meta">{t.social_security_enrolled!==false ? 'Con TSS/AFP' : 'Sin TSS/AFP'}</p>
                   <p className="teacher-meta">
                     {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
                     {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
@@ -1621,14 +1664,44 @@ function AdminApp({ user, onLogout, toast, Toast }){
       <>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14, gap:8}}>
           <p className="section-title" style={{margin:0}}>Registros de nómina</p>
-          {!f && !bulkOpen && (
-            <div style={{display:'flex',gap:8}}>
+          {!f && !bulkOpen && !multiOpen && (
+            <div style={{display:'flex',gap:8, flexWrap:'wrap'}}>
+              <button className="btn btn-outline btn-sm" onClick={()=>setMultiOpen(true)}>Seleccionar maestras</button>
               <button className="btn btn-outline btn-sm" onClick={()=>{setBulkOpen(true); setBulkPreview(null);}}>Carga masiva</button>
               <button className="btn btn-warm btn-sm" onClick={()=>setPayrollForm({ id:null, teacherId:teachers[0]?.id||'', month:new Date().toISOString().slice(0,7), bruto:'', otras:'', fechaPago:todayStr(), nota:'' })}><Icon name="plus" sw={2}/> Nueva</button>
             </div>
           )}
         </div>
-        {!f && !bulkOpen && payroll.length>0 && (
+        {multiOpen && (
+          <div className="form-card" style={{marginBottom:16}}>
+            <p className="hint" style={{marginBottom:10}}>Selecciona las maestras a las que quieres enviar nómina este mes. Se usa el sueldo que ya tienen guardado en Maestras, y las deducciones se calculan según si tienen TSS/AFP activado o no.</p>
+            <div className="two-col">
+              <div className="field"><label>Mes</label><input type="month" value={multiMonth} onChange={e=>setMultiMonth(e.target.value)} /></div>
+              <div className="field"><label>Fecha de pago</label><input type="date" value={multiFecha} onChange={e=>setMultiFecha(e.target.value)} /></div>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+              <label style={{marginBottom:0}}>Maestras (con sueldo guardado)</label>
+              <button type="button" className="link-btn" style={{marginTop:0}} onClick={()=>{
+                const withSalary = teachers.filter(t=>t.monthly_salary).map(t=>t.id);
+                setMultiTeacherIds(multiTeacherIds.length===withSalary.length ? [] : withSalary);
+              }}>{multiTeacherIds.length===teachers.filter(t=>t.monthly_salary).length ? 'Ninguna' : 'Todas'}</button>
+            </div>
+            <div className="chip-row" style={{marginBottom:14}}>
+              {teachers.filter(t=>t.monthly_salary).map(t=>(
+                <button key={t.id} type="button" className={`chip${multiTeacherIds.includes(t.id)?' active':''}`}
+                  onClick={()=>setMultiTeacherIds(prev=>prev.includes(t.id) ? prev.filter(x=>x!==t.id) : [...prev, t.id])}>
+                  {t.name} · {fmtMoney(t.monthly_salary)}
+                </button>
+              ))}
+              {!teachers.filter(t=>t.monthly_salary).length && <p className="hint">Ninguna maestra tiene sueldo guardado todavía — agrégalo en Maestras.</p>}
+            </div>
+            <div className="li-actions">
+              <button type="button" className="btn btn-ghost" onClick={()=>{setMultiOpen(false); setMultiTeacherIds([]);}}>Cancelar</button>
+              <button type="button" className="btn btn-primary" disabled={multiBusy || !multiTeacherIds.length} onClick={saveMultiPayroll}>{multiBusy?'Enviando…':`Enviar nómina (${multiTeacherIds.length})`}</button>
+            </div>
+          </div>
+        )}
+        {!f && !bulkOpen && !multiOpen && payroll.length>0 && (
           <div className="export-row">
             <button className="btn btn-outline btn-sm" onClick={()=>downloadCSV('nomina_sensi.csv', ['Maestra','Mes','Bruto','AFP','SFS','ISR','Otras deducciones','Neto','Fecha de pago','Nota'], payroll.map(p=>[p.teacher_name, fmtMonth(p.month), p.bruto, p.afp, p.sfs, p.isr, p.other_deductions, p.neto, fmtDate(p.fecha_pago), p.nota||'']))}>Exportar CSV</button>
             <button className="btn btn-outline btn-sm" onClick={()=>window.print()}>Imprimir / PDF</button>
