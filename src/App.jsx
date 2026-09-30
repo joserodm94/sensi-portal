@@ -459,7 +459,8 @@ const ICONS = {
   chevron:'<path d="M9 6l6 6-6 6"/>',
   edit:'<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>',
   trash:'<path d="M4.5 7h15M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M7 7l1 12.5A1.5 1.5 0 0 0 9.5 21h5a1.5 1.5 0 0 0 1.5-1.5L17 7"/>',
-  user:'<circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 20c1.1-4.2 4-6.4 7.2-6.4s6.1 2.2 7.2 6.4"/>'
+  user:'<circle cx="12" cy="8.2" r="3.6"/><path d="M4.8 20c1.1-4.2 4-6.4 7.2-6.4s6.1 2.2 7.2 6.4"/>',
+  send:'<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/>'
 };
 function Icon({ name, sw=1.8 }){
   return <span className="icon" dangerouslySetInnerHTML={{__html:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]||''}</svg>`}} />;
@@ -1613,6 +1614,14 @@ function AdminApp({ user, onLogout, toast, Toast }){
     reload();
   }
 
+  async function resendPayrollNotice(p){
+    const teacher = teachers.find(t=>t.id===p.teacher_id);
+    if(!teacher || !teacher.email){ toast('Esa maestra no tiene correo registrado. Agrégalo en Maestras.'); return; }
+    const ok = await sendNotification(user.session, teacher.email, `Tu nómina de ${fmtMonth(p.month)} ya está disponible`,
+      `<p>Hola ${teacher.name},</p><p>Tu nómina de <strong>${fmtMonth(p.month)}</strong> ya está disponible en el Portal de Personal. Neto: <strong>${fmtMoney(p.neto)}</strong>.</p><p>— Sensi Portal</p>`);
+    toast(ok ? 'Aviso reenviado.' : 'No se pudo enviar.');
+  }
+
   async function deletePayroll(id){
     const { error } = await supabase.rpc('admin_delete_payroll', { p_session: user.session,  p_payroll_id:id });
     if(error){ toast('No se pudo eliminar.'); return; }
@@ -1872,6 +1881,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <p className="li-sub" style={{textTransform:'capitalize'}}>{fmtMonth(p.month)} · Neto {fmtMoney(p.neto)}</p>
               </div>
               <div className="row-actions">
+                <button className="mini-btn" onClick={()=>resendPayrollNotice(p)} aria-label="Reenviar aviso"><Icon name="send" sw={1.6}/></button>
                 <button className="mini-btn" onClick={()=>setPayrollForm({ id:p.id, teacherId:p.teacher_id, month:p.month, bruto:p.bruto, otras:p.other_deductions||0, fechaPago:p.fecha_pago, nota:p.nota||'' })}><Icon name="edit" sw={1.6}/></button>
                 <button className="mini-btn" onClick={()=>deletePayroll(p.id)}><Icon name="trash" sw={1.6}/></button>
               </div>
