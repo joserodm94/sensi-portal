@@ -1261,18 +1261,25 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function resendInvoice(inv){
-    const html = buildInvoiceEmailHtml(inv);
-    const ok = await sendNotification(user.session, inv.emails_snapshot, `Factura Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
+    // Trae los datos mas recientes de esa factura antes de mandarla, por si
+    // se corrigió algo en la base de datos desde que se cargó esta pantalla.
+    const { data: fresh } = await supabase.rpc('admin_list_invoices', { p_session: user.session });
+    const current = (fresh || []).find(i=>i.id===inv.id) || inv;
+    const html = buildInvoiceEmailHtml(current);
+    const ok = await sendNotification(user.session, current.emails_snapshot, `Factura Sensi SRL - ${fmtMonth(current.billing_month)}`, html);
     toast(ok ? 'Factura reenviada.' : 'No se pudo enviar. Revisa el correo de la familia.');
+    reload();
   }
 
   async function resendReceipt(inv){
+    const { data: fresh } = await supabase.rpc('admin_list_invoices', { p_session: user.session });
+    const current = (fresh || []).find(i=>i.id===inv.id) || inv;
     const html = buildReceiptHtml({
-      receipt_number: inv.receipt_number, invoice_number: inv.invoice_number,
-      tutor_name: inv.tutor_name_snapshot, total: inv.total, payment_date: inv.payment_date,
-      items_snapshot: inv.items_snapshot, billing_month: inv.billing_month
+      receipt_number: current.receipt_number, invoice_number: current.invoice_number,
+      tutor_name: current.tutor_name_snapshot, total: current.total, payment_date: current.payment_date,
+      items_snapshot: current.items_snapshot, billing_month: current.billing_month
     });
-    const ok = await sendNotification(user.session, inv.emails_snapshot, `Recibo de Pago Sensi SRL - ${fmtMonth(inv.billing_month)}`, html);
+    const ok = await sendNotification(user.session, current.emails_snapshot, `Recibo de Pago Sensi SRL - ${fmtMonth(current.billing_month)}`, html);
     toast(ok ? 'Recibo reenviado.' : 'No se pudo enviar. Revisa el correo de la familia.');
   }
 
