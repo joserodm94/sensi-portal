@@ -1014,7 +1014,7 @@ function PayrollFormFields({ f, teachers, onSubmit, onCancel }){
     <form className="form-card" style={{marginBottom:16}} onSubmit={onSubmit}>
       <div className="field"><label>Maestra</label>
         <select name="teacherId" defaultValue={f.teacherId}>
-          {teachers.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+          {teachers.filter(t=>t.active).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
       </div>
       <div className="field"><label>Mes</label><input name="month" type="month" defaultValue={f.month} required /></div>
@@ -1516,9 +1516,10 @@ function AdminApp({ user, onLogout, toast, Toast }){
     const email = f.email.value.trim(), salary = f.salary.value ? Number(f.salary.value) : null, hireDate = f.hireDate.value || null;
     const cedula = f.cedula.value.trim(), workSchedule = f.workSchedule.value.trim();
     const ss = f.socialSecurity.checked;
+    const endDate = f.endDate.value || null;
     if(!name){ toast('Escribe el nombre.'); return; }
     if(pin && !/^\d{4}$/.test(pin)){ toast('El PIN debe ser de 4 dígitos.'); return; }
-    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss });
+    const { error } = await supabase.rpc('admin_edit_teacher', { p_session: user.session,  p_teacher_id:id, p_name:name, p_pin:pin||null, p_vacation_days_total:vac||0, p_vacation_days_used:used||0, p_email:email||null, p_monthly_salary:salary, p_hire_date:hireDate, p_cedula:cedula||null, p_work_schedule:workSchedule||null, p_social_security_enrolled:ss, p_end_date:endDate });
     if(error){ toast('No se pudo guardar. Intenta de nuevo.'); return; }
     toast('Cambios guardados.');
     setEditingTeacherId(null);
@@ -1561,8 +1562,9 @@ function AdminApp({ user, onLogout, toast, Toast }){
       const bruto = Number((parts[1]||'').replace(/[^\d.]/g,'')) || 0;
       const otras = Number((parts[2]||'').replace(/[^\d.]/g,'')) || 0;
       const nameLower = rawName.toLowerCase();
-      let teacher = teachers.find(t=>t.name.toLowerCase()===nameLower);
-      if(!teacher) teacher = teachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
+      const activeTeachers = teachers.filter(t=>t.active);
+      let teacher = activeTeachers.find(t=>t.name.toLowerCase()===nameLower);
+      if(!teacher) teacher = activeTeachers.find(t=>t.name.toLowerCase().includes(nameLower) || nameLower.includes(t.name.toLowerCase()));
       const calc = bruto ? calcularDeduccionesRD(bruto, otras) : null;
       return { rawName, bruto, otras, teacher, calc };
     });
@@ -1595,7 +1597,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
   }
 
   async function saveMultiPayroll(){
-    const selected = teachers.filter(t=>multiTeacherIds.includes(t.id) && t.monthly_salary);
+    const selected = teachers.filter(t=>multiTeacherIds.includes(t.id) && t.monthly_salary && t.active);
     if(!selected.length){ toast('Selecciona al menos una maestra con sueldo guardado.'); return; }
     setMultiBusy(true);
     let ok=0, fail=0;
@@ -1754,6 +1756,11 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 <input name="socialSecurity" type="checkbox" defaultChecked={t.social_security_enrolled!==false} style={{width:'auto'}} />
                 <span>Está en TSS y AFP (se le calculan las deducciones)</span>
               </label>
+              <div className="field">
+                <label>Fecha final (déjalo en blanco si sigue activa)</label>
+                <input name="endDate" type="date" defaultValue={t.end_date||''} />
+                <p className="hint" style={{marginTop:4}}>Al poner una fecha, queda inactiva automáticamente: no sale en el login, en nómina, ni en el calendario.</p>
+              </div>
               <div className="li-actions">
                 <button type="button" className="btn btn-ghost" onClick={()=>setEditingTeacherId(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary">Guardar</button>
@@ -1771,6 +1778,7 @@ function AdminApp({ user, onLogout, toast, Toast }){
                   {t.work_schedule && <p className="teacher-meta">{t.work_schedule}</p>}
                   {t.cedula && <p className="teacher-meta">Cédula {t.cedula}</p>}
                   <p className="teacher-meta">{t.social_security_enrolled!==false ? 'Con TSS/AFP' : 'Sin TSS/AFP'}</p>
+                  {t.end_date && <p className="teacher-meta">Empleada hasta el {fmtDate(t.end_date)}</p>}
                   <p className="teacher-meta">
                     {t.monthly_salary ? fmtMoney(t.monthly_salary)+' /mes' : 'Salario no registrado'}
                     {t.hire_date ? ` · Desde ${fmtDate(t.hire_date)}` : ''}
@@ -1811,20 +1819,20 @@ function AdminApp({ user, onLogout, toast, Toast }){
               <div className="field"><label>Fecha de pago</label><input type="date" value={multiFecha} onChange={e=>setMultiFecha(e.target.value)} /></div>
             </div>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-              <label style={{marginBottom:0}}>Maestras (con sueldo guardado)</label>
+              <label style={{marginBottom:0}}>Maestras activas (con sueldo guardado)</label>
               <button type="button" className="link-btn" style={{marginTop:0}} onClick={()=>{
-                const withSalary = teachers.filter(t=>t.monthly_salary).map(t=>t.id);
+                const withSalary = teachers.filter(t=>t.active && t.monthly_salary).map(t=>t.id);
                 setMultiTeacherIds(multiTeacherIds.length===withSalary.length ? [] : withSalary);
-              }}>{multiTeacherIds.length===teachers.filter(t=>t.monthly_salary).length ? 'Ninguna' : 'Todas'}</button>
+              }}>{multiTeacherIds.length===teachers.filter(t=>t.active && t.monthly_salary).length ? 'Ninguna' : 'Todas'}</button>
             </div>
             <div className="chip-row" style={{marginBottom:14}}>
-              {teachers.filter(t=>t.monthly_salary).map(t=>(
+              {teachers.filter(t=>t.active && t.monthly_salary).map(t=>(
                 <button key={t.id} type="button" className={`chip${multiTeacherIds.includes(t.id)?' active':''}`}
                   onClick={()=>setMultiTeacherIds(prev=>prev.includes(t.id) ? prev.filter(x=>x!==t.id) : [...prev, t.id])}>
                   {t.name} · {fmtMoney(t.monthly_salary)}
                 </button>
               ))}
-              {!teachers.filter(t=>t.monthly_salary).length && <p className="hint">Ninguna maestra tiene sueldo guardado todavía — agrégalo en Maestras.</p>}
+              {!teachers.filter(t=>t.active && t.monthly_salary).length && <p className="hint">Ninguna maestra activa tiene sueldo guardado todavía — agrégalo en Maestras.</p>}
             </div>
             <div className="li-actions">
               <button type="button" className="btn btn-ghost" onClick={()=>{setMultiOpen(false); setMultiTeacherIds([]);}}>Cancelar</button>
