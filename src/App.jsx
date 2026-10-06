@@ -2074,7 +2074,9 @@ function AdminApp({ user, onLogout, toast, Toast }){
           </>
         ) : null}
         {ninosView==='facturas' ? (
-          invoicesList.length ? invoicesList.map(inv=>{
+          (()=>{
+            const filteredInvoices = invoicesList.filter(inv=>inv.issue_date && inv.issue_date.slice(0,7)===invoiceSummaryMonth);
+            return filteredInvoices.length ? filteredInvoices.map(inv=>{
             const isOverdue = inv.status==='emitida' && inv.due_date < todayStr();
             return (
             <div key={inv.id} className={`list-item st-${inv.status==='pagada'?'aprobado':isOverdue?'rechazado':'pendiente'}`}>
@@ -2111,7 +2113,8 @@ function AdminApp({ user, onLogout, toast, Toast }){
                 </div>
               )}
             </div>
-          );}) : <div className="empty-state">Aún no se ha emitido ninguna factura.</div>
+          );}) : <div className="empty-state">No hay facturas emitidas en ese mes.</div>;
+          })()
         ) : (
           <>
             <div style={{display:'flex',justifyContent:'flex-end',marginBottom:14, marginTop:14}}>
